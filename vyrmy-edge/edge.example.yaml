@@ -1,0 +1,41 @@
+# Copy to ${APP_DATA_DIR}/data/edge.yaml on the Umbrel and edit.
+# sync re-reads it within a few seconds of any change.
+
+domain: bebitwise.dev
+proxy_ip: 192.168.10.4
+
+# Applied to every app unless overridden under `apps`.
+defaults:
+  internal: true    # UniFi A record <app>.bebitwise.dev -> proxy_ip
+  external: true    # Cloudflare Tunnel hostname
+  access: true      # Cloudflare Access in front of the tunnel hostname
+
+# Never external unless apps.<id>.external is set explicitly.
+external_deny:
+  - home-assistant
+  - portainer
+  - code-server
+  - termix
+  - tor-browser
+  - wireguard
+  - tailscale
+  - vyrmy-edge
+
+# Ignored entirely: no route, no records.
+exclude:
+  - mosquitto
+
+access:
+  allowed_emails:
+    - you@example.com
+  session_duration: 24h
+
+# Per-app overrides, keyed by Umbrel app id.
+apps: {}
+#  jellyfin:
+#    subdomain: tv
+#  some-app:
+#    external: false
+#  app-with-tls:
+#    upstream_scheme: https
+#    upstream_port: 8443

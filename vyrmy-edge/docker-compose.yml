@@ -1,0 +1,59 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      # Traefik dashboard, reachable only through Umbrel's own login.
+      APP_HOST: vyrmy-edge_traefik_1
+      APP_PORT: 8080
+
+  traefik:
+    image: traefik:v3.7.13
+    restart: on-failure
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    env_file:
+      - path: ${APP_DATA_DIR}/data/secrets.env
+        required: false
+    volumes:
+      - ${APP_DATA_DIR}/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ${APP_DATA_DIR}/data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    mac_address: "02:42:c0:a8:0a:04"
+    networks:
+      default: {}
+      edge: {}
+      lan:
+        ipv4_address: 192.168.10.4
+
+  sync:
+    # Built by .github/workflows/build.yml. Pin to a digest once the first build exists.
+    image: ghcr.io/vyrmy/umbrel-edge-sync:main
+    restart: on-failure
+    env_file:
+      - path: ${APP_DATA_DIR}/data/secrets.env
+        required: false
+    environment:
+      EDGE_CONFIG: /data/edge.yaml
+      EDGE_APP_DATA_ROOT: /umbrel/app-data
+      EDGE_TRAEFIK_DYNAMIC_DIR: /data/traefik/dynamic
+      EDGE_STATE_DIR: /data/state
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      # Every app's data folder, read-only, for umbrel-app.yml discovery.
+      - ${APP_DATA_DIR}/..:/umbrel/app-data:ro
+    networks:
+      edge: {}
+
+networks:
+  edge:
+    driver: bridge
+  lan:
+    driver: macvlan
+    driver_opts:
+      parent: enp2s0
+    ipam:
+      config:
+        - subnet: 192.168.10.0/24
+          gateway: 192.168.10.1
+          ip_range: 192.168.10.4/32

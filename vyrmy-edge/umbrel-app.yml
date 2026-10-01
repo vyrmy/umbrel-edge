@@ -1,0 +1,35 @@
+manifestVersion: 1
+id: vyrmy-edge
+name: Edge
+tagline: HTTPS hostnames for every app, at home and away
+icon: https://raw.githubusercontent.com/traefik/traefik/master/docs/content/assets/img/traefik.logo.png
+category: networking
+version: "0.1.0"
+port: 18080
+description: >-
+  Gives every app on this Umbrel its own hostname under bebitwise.dev, with a
+  Let's Encrypt certificate. At home the name resolves to a Traefik proxy on
+  192.168.10.4. Away, it goes through a Cloudflare Tunnel behind Cloudflare
+  Access.
+
+
+  Routes, UniFi DNS records, tunnel hostnames and Access applications follow
+  the installed apps automatically. Configuration lives in edge.yaml in the
+  app's data folder.
+
+
+  This page is the Traefik dashboard.
+developer: vyrmy
+website: https://github.com/vyrmy/umbrel-edge
+submitter: vyrmy
+submission: https://github.com/vyrmy/umbrel-edge
+repo: https://github.com/vyrmy/umbrel-edge
+support: https://github.com/vyrmy/umbrel-edge/issues
+gallery: []
+releaseNotes: >-
+  First release: Traefik on its own LAN address with a wildcard certificate,
+  and the sync service writing one route per installed app.
+dependencies: []
+path: "/dashboard/"
+defaultUsername: ""
+defaultPassword: ""

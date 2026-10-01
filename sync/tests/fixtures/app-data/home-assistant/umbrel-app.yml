@@ -1,0 +1,4 @@
+manifestVersion: 1
+id: home-assistant
+name: Home Assistant
+port: 8123

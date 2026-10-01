@@ -1,0 +1,265 @@
+# Umbrel edge: reverse proxy with automatic internal and external DNS
+
+## Problem
+
+Every app on the Umbrel (Dell 3080, `192.168.10.2`, Servers network) is reached today by IP and port, or by `umbrel.local`, which does not resolve across VLANs. There is no TLS on the LAN and no way in from outside apart from the WireGuard VPN.
+
+This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that works both at home and away. At home the name resolves straight to a reverse proxy on the LAN. Away, it resolves to a Cloudflare Tunnel with Cloudflare Access in front. Installing or removing an app on the Umbrel creates or removes its route, its UniFi DNS record, its tunnel hostname and its Access application within a minute, with no manual step.
+
+## Non-goals
+
+- Exposing anything that is not an Umbrel app. UniFi, Protect, the PicoKVM and the Sonoff dongle stay LAN or VPN only.
+- Replacing Umbrel's own login. Apps keep Umbrel app auth where it works (see Risks).
+- Wildcard DNS or wildcard tunnel ingress. Every hostname is created explicitly, so nothing is reachable by accident.
+- Hostnames more than one level deep (`app.home.DOMAIN`). Cloudflare's free Universal SSL only covers `*.DOMAIN`.
+- IPv6. None of the networks have IPv6 today.
+- High availability. One proxy, one tunnel connector. If the Dell is down, the apps are down anyway.
+- A web UI for the sync service. Configuration is one YAML file.
+- Managing Tailscale, WireGuard or the UniFi firewall beyond the rules listed in task 001.
+
+## Decisions
+
+1. **One hostname per app, same name inside and outside (split horizon).** `jellyfin.DOMAIN` works on the sofa and on the train. Rejected: separate internal names (`jellyfin.home.DOMAIN`), which need two bookmarks per app and a paid certificate for the two-level name on Cloudflare.
+2. **Traefik v3 as the reverse proxy.** Built-in Let's Encrypt with Cloudflare DNS-01, and a file provider that hot-reloads generated YAML. Rejected: Nginx Proxy Manager, which is already installed but UI-driven, with an awkward API, and it is stuck on ports 40080/40443. Also rejected: Caddy, which needs a custom build for the Cloudflare DNS module.
+3. **The proxy gets its own LAN address, `192.168.10.4`, via a Docker macvlan network.** umbreld holds port 80 on the host now, and umbrelOS 2.0 also binds 443 and 2000 unconditionally ([umbrel#2239](https://github.com/getumbrel/umbrel/issues/2239)). A separate address avoids both. Rejected: patching umbreld's ports with a custom hook, which breaks on the next OS update.
+4. **Traefik is dual-homed.** Macvlan receives LAN traffic. A bridge network reaches the Umbrel host's app ports through `host.docker.internal`, because a macvlan child cannot talk to its own parent host.
+5. **One wildcard certificate, `*.DOMAIN`, from Let's Encrypt via DNS-01.** One certificate means one renewal and one rate-limit budget. Certificate Transparency logs show only the wildcard, not app names.
+6. **Internal DNS is per-app A records in UniFi, written through the official UniFi Network Integration API.** UniFi's resolver does not support wildcards ([external-dns-unifi-webhook](https://github.com/home-operations/external-dns-unifi-webhook)), and Network 10.6.106 is above the 10.3.58 minimum for the DNS policy endpoints. Rejected: a UniFi "Forward Domain" to AdGuard Home with a wildcard rewrite, which adds a second DNS server that isn't set up yet and would capture the whole zone.
+7. **External access uses our own `cloudflared` container inside this app, on a remotely managed tunnel.** It sits on the same bridge as Traefik and reaches it by container name. Rejected: the existing Umbrel "Cloudflare Tunnel" app, which runs in a separate Docker network and cannot reach the macvlan address from the host.
+8. **Every external hostname gets a Cloudflare Access application by default** (one-time email PIN, allow-list of your addresses). Access is free for up to 50 users. One login covers every app: Access keeps a session on the team domain (`<team>.cloudflareaccess.com`), so after the first PIN each further app costs one automatic redirect and no prompt, until the global session expires. Set the global session and each app's session to the same duration (`access.session_duration`). Policies are written against email addresses, so swapping the one-time PIN for an identity provider later (any OIDC provider, including a self-hosted one) is a login-method change in Zero Trust, with no change to `sync`. Rejected: relying on each app's own login, since several apps (Transmission, IT-Tools, CyberChef, Excalidraw) have none.
+9. **Exposure defaults: internal on for every app, external on behind Access for every app, with a short built-in deny list for external.** The deny list is Home Assistant, Portainer, code-server, Termix, Tor Browser, WireGuard, Tailscale and the edge app itself. Every default can be overridden per app in `edge.yaml`. Home Assistant is on the deny list because its companion app cannot complete an Access login. Away from home, the companion app reaches it over the UniFi WireGuard VPN with on-demand rules: the VPN hands out the UCG as DNS server, so `home-assistant.DOMAIN` resolves to `192.168.10.4` exactly as it does at home, with the same certificate and one URL in the app. The firewall rule VPN → `192.168.10.4` TCP 443 is already in task 001. Rejected: mTLS client certificates at Cloudflare with Access bypassed for Home Assistant. It works on iOS, but the Android app has an open bug where it fails to connect through Cloudflare mTLS ([android#5899](https://github.com/home-assistant/android/issues/5899)), and the published workaround exempts the API and WebSocket paths, which leaves Home Assistant's own login as the only gate.
+10. **The sync service is a small Python reconciler, running in a loop every 60 seconds plus on config change.** It is idempotent and only deletes resources it created. It tags them `managed-by=umbrel-edge` in Cloudflare DNS comments, uses an `umbrel-edge:` name prefix for Access apps, and keeps an ownership file for UniFi records. Rejected: Docker-label discovery, because Umbrel app compose files are store-managed and label edits are lost on update.
+11. **App discovery reads `${UMBREL_ROOT}/app-data/*/umbrel-app.yml` read-only.** Each manifest carries `id`, `name` and `port`, the app_proxy port on the host. Rejected: umbreld's tRPC API, which needs a user JWT (and your account has 2FA).
+12. **The app is shipped as a private Umbrel community app store in a GitHub repo, with images built by GitHub Actions to GHCR and pinned by digest.** Community app stores are Umbrel's supported extension point and survive OS updates.
+13. **The Umbrel dashboard opens apps at their own hostnames through an injected launcher script.** The dashboard builds an app's link from whatever host you loaded it on plus the app's port, so from `umbrel.DOMAIN` it would open `umbrel.DOMAIN:8123`. Traefik's body-rewrite plugin adds one `<script src="/__edge/launcher.js">` tag to the dashboard's HTML on the `umbrel.DOMAIN` route only. `sync` generates `launcher.js` from the same port-to-hostname map it already builds, and serves it on that route. The script rewrites any link or `window.open` call aimed at `<current host>:<port>` to `https://<app>.DOMAIN<path>`. It works at home and through the tunnel. Rejected: Traefik listening on every app port and redirecting, which only works at home, because Cloudflare proxies a fixed short list of ports; it also needs a Traefik restart whenever an app is installed. Rejected: patching the dashboard's code, which is lost on every umbrelOS update.
+
+## Stack
+
+| Component | Choice | Version |
+|---|---|---|
+| Reverse proxy | Traefik | v3.x (pin the latest v3 minor at build time) |
+| Tunnel connector | cloudflared | latest release at build time, pinned by digest |
+| Sync service | Python | 3.12 |
+| HTTP client | httpx | 0.27+ |
+| Models and validation | pydantic | v2 |
+| YAML | PyYAML | 6.x |
+| Tests | pytest, respx (httpx mocking) | current |
+| Lint and types | ruff, mypy `--strict` | current |
+| CI | GitHub Actions, GHCR | n/a |
+| Host | umbrelOS on the Dell 3080 | whatever is installed; check 1.x or 2.x in task 001 |
+
+## Architecture
+
+```
+                         Internet
+                            │
+                   Cloudflare edge (DNS, Access, Tunnel)
+                            │  outbound QUIC from cloudflared
+┌───────────────────────────┼─────────────────────────── Umbrel (192.168.10.2) ─┐
+│  umbrel-edge app          │                                                  │
+│   ┌────────────┐   bridge "edge"   ┌───────────┐        ┌──────────────┐     │
+│   │ cloudflared├──────────────────►│  traefik  │◄───────┤ sync (Python)│     │
+│   └────────────┘   https://traefik │           │ writes │              │     │
+│                                    │  macvlan  │ dynamic│ reads app-data│    │
+│                                    │192.168.10.4 yml   │ calls CF API  │    │
+│                                    └─────┬─────┘        │ calls UniFi API│   │
+│                     host.docker.internal:│<port>        └──────────────┘     │
+│   Umbrel apps (app_proxy ports) ◄────────┘                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+        ▲ LAN clients resolve app.DOMAIN → 192.168.10.4 via UniFi A records
+```
+
+**Where each component runs.** Everything runs on the Umbrel, in one Umbrel app with three containers: `traefik`, `cloudflared` and `sync`. Cloudflare provides DNS for `DOMAIN`, the tunnel and Access. The UCG Fiber provides LAN DNS.
+
+**Network topology.**
+
+- Traefik listens on `192.168.10.4:80` (redirect to HTTPS) and `:443`. That address is on the Servers network, outside the DHCP pool (`.6` to `.254`), with a UniFi reservation for the fixed macvlan MAC.
+- Firewall additions: Main → `192.168.10.4` TCP 80/443, and VPN → `192.168.10.4` TCP 80/443. IoT gets nothing.
+- `cloudflared` makes outbound connections only. The Servers zone already allows internet access.
+- Traefik reaches apps at `host.docker.internal:<port>` over the bridge. Home Assistant runs in host network mode on port 8123 and is reached the same way.
+
+**Request paths.**
+
+- *At home:* the client asks the UCG for `jellyfin.DOMAIN`, gets the local A record `192.168.10.4`, connects over TLS with the wildcard certificate, and Traefik proxies to `host.docker.internal:<jellyfin port>`.
+- *Away:* public DNS returns a CNAME to `<tunnel-id>.cfargotunnel.com`. Cloudflare Access challenges the visitor. The tunnel delivers the request to `cloudflared`, which calls `https://traefik:443` with `originServerName: jellyfin.DOMAIN`. Traefik then proxies it exactly as it does at home.
+
+**Background work.** `sync` runs a reconcile loop every 60 seconds, and immediately when `edge.yaml` changes. Each pass has four stages:
+
+1. Discover the apps and build the desired state.
+2. Write the Traefik file.
+3. Reconcile UniFi.
+4. Reconcile Cloudflare: tunnel ingress, then DNS, then Access.
+
+Each stage is independent. If one fails, the others still run, the error is recorded, and the next pass retries. A crash mid-pass is safe, because every write is an idempotent upsert. The Traefik file is written to a temporary file and renamed into place, so Traefik never reads a half-written file.
+
+**Secrets and configuration.** Secrets live in `${APP_DATA_DIR}/data/secrets.env`, mode 0600, created by hand once and never committed:
+
+- `CF_DNS_API_TOKEN`: read by Traefik for the DNS-01 challenge. Zone DNS Edit on `DOMAIN` only.
+- `CF_API_TOKEN`: read by `sync`. Zone DNS Edit on `DOMAIN`, Account Cloudflare Tunnel Edit, and Account Access Apps and Policies Edit.
+- `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `CF_TUNNEL_ID`, `TUNNEL_TOKEN`.
+- `UNIFI_API_KEY`: created under Control Plane → Integrations.
+- `UNIFI_HOST`, `UNIFI_SITE_ID`.
+
+Non-secret configuration lives in `${APP_DATA_DIR}/data/edge.yaml`. The dashboard itself gets a route as a built-in app with id `umbrel`, upstream port 80.
+
+**Environments.** One, production. For changes, run `sync --dry-run` locally against a copy of the app-data manifests. It prints the diff and makes no API writes.
+
+**Observability.**
+
+- Logs are structured JSON on stdout, visible in the Umbrel app logs.
+- `sync` serves `GET /healthz` on the bridge only.
+- Uptime Kuma (already installed) monitors `/healthz` through Traefik at `edge.DOMAIN`, internal only, and each app hostname. It alerts you through whatever notifier you set in Uptime Kuma.
+
+**Cost.** £0 a month: Cloudflare Tunnel, DNS and Access (up to 50 users) are free, and the domain is one you already own. Let's Encrypt is free.
+
+## Structure
+
+```
+umbrel-edge/                         # GitHub repo, added to Umbrel as a community app store
+├── umbrel-app-store.yml             # store id "vyrmy", store name
+├── vyrmy-edge/                  # the Umbrel app (folder = <store id>-<app id>)
+│   ├── umbrel-app.yml               # manifest: id, name, port (Traefik dashboard, LAN only)
+│   ├── docker-compose.yml           # traefik, cloudflared, sync; macvlan + bridge networks
+│   ├── traefik/traefik.yml          # static config: entrypoints, ACME DNS-01, file provider
+│   └── edge.example.yaml            # annotated example of edge.yaml
+├── sync/                            # Python package, built into the sync image
+│   ├── pyproject.toml
+│   ├── src/umbrel_edge/
+│   │   ├── __main__.py              # CLI: run loop, --once, --dry-run
+│   │   ├── config.py                # loads edge.yaml + env into Settings (pydantic)
+│   │   ├── models.py                # AppManifest, AppPolicy, Route, DesiredState
+│   │   ├── discovery.py             # reads app-data manifests → list[AppManifest]
+│   │   ├── desired.py               # manifests + config → DesiredState (pure)
+│   │   ├── traefik_writer.py        # DesiredState → dynamic YAML, atomic write
+│   │   ├── unifi.py                 # UniFi Integration API client + reconciler
+│   │   ├── cloudflare.py            # tunnel ingress, DNS, Access clients + reconcilers
+│   │   ├── ownership.py             # tracks UniFi record ids this service created
+│   │   ├── health.py                # /healthz server and last-run state
+│   │   ├── launcher.py              # DesiredState → launcher.js, served at /__edge/launcher.js
+│   │   └── loop.py                  # orchestration, per-stage error isolation
+│   └── tests/                       # pytest; respx fakes for both APIs
+├── .github/workflows/build.yml      # build + push sync image to GHCR, run tests
+└── docs/architecture/               # this plan and the task files
+```
+
+## Data model
+
+No database. The persistent state is:
+
+- `edge.yaml` (input, owned by you).
+- `ownership.json` (UniFi record ids, owned by `sync`).
+- Traefik's `acme.json`.
+- The remote resources in UniFi and Cloudflare.
+
+The models:
+
+```python
+# sync/src/umbrel_edge/models.py
+from __future__ import annotations
+from typing import Literal
+from pydantic import BaseModel, Field, IPvAnyAddress
+
+SUBDOMAIN_RE = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+
+class AppManifest(BaseModel):
+    """What discovery reads from app-data/<id>/umbrel-app.yml."""
+    id: str
+    name: str
+    port: int = Field(ge=1, le=65535)
+
+class AppPolicy(BaseModel):
+    """Per-app override in edge.yaml. None means 'use the default'."""
+    subdomain: str | None = Field(default=None, pattern=SUBDOMAIN_RE)
+    internal: bool | None = None
+    external: bool | None = None
+    access: bool | None = None
+    upstream_port: int | None = Field(default=None, ge=1, le=65535)
+    upstream_scheme: Literal["http", "https"] = "http"
+
+class Defaults(BaseModel):
+    internal: bool = True
+    external: bool = True
+    access: bool = True
+
+class AccessSettings(BaseModel):
+    allowed_emails: list[str] = Field(min_length=1)
+    session_duration: str = "24h"
+
+class EdgeConfig(BaseModel):
+    """The whole of edge.yaml."""
+    domain: str
+    proxy_ip: IPvAnyAddress
+    defaults: Defaults = Defaults()
+    external_deny: list[str] = [
+        "home-assistant", "portainer", "code-server", "termix",
+        "tor-browser", "wireguard", "tailscale", "vyrmy-edge",
+    ]
+    exclude: list[str] = ["mosquitto"]   # apps to ignore entirely (no web UI)
+    access: AccessSettings
+    apps: dict[str, AppPolicy] = {}
+
+class Route(BaseModel):
+    """One app's resolved desired state."""
+    app_id: str
+    hostname: str                        # e.g. "jellyfin.example.com"
+    upstream: str                        # e.g. "http://host.docker.internal:8096"
+    internal: bool
+    external: bool
+    access: bool
+
+class DesiredState(BaseModel):
+    routes: list[Route]                  # sorted by hostname, unique hostnames
+```
+
+`ownership.json`:
+
+```json
+{ "version": 1, "unifi_records": { "jellyfin.example.com": "<dns-policy-id>" } }
+```
+
+Rules applied in `desired.py`:
+
+- The subdomain defaults to the app id.
+- `external` is forced false for ids in `external_deny` unless `apps.<id>.external` is set explicitly.
+- `access` only matters when `external` is true.
+- Hostname collisions are a validation error, not a silent overwrite.
+
+## Contracts
+
+**CLI** (`python -m umbrel_edge`):
+
+| Flag | Behaviour |
+|---|---|
+| (none) | Run the reconcile loop and serve `/healthz` on `:9000`. |
+| `--once` | One pass. Exit code 0 on success, 1 if any stage failed. |
+| `--dry-run` | Compute and print the diff for every stage. No writes. Implies `--once`. |
+
+**Health endpoint.** `GET /healthz` on `sync:9000`, bridge network only.
+
+- `200` `{"status": "ok", "last_success": "<ISO 8601>", "routes": <int>}` when the last pass succeeded within 5 minutes.
+- `503` `{"status": "degraded", "last_success": "<ISO 8601 | null>", "errors": [{"stage": "unifi|cloudflare_tunnel|cloudflare_dns|cloudflare_access|traefik", "message": "<str>"}]}` otherwise.
+
+**Traefik dynamic file** (`/data/traefik/dynamic/apps.yml`, written by `sync`, read by Traefik's file provider). One router per route: rule ``Host(`<hostname>`)``, entrypoint `websecure`, TLS with certResolver `cloudflare` and domain `*.DOMAIN`. One service per route, with loadBalancer server `<upstream>` and passHostHeader true. Only routes with `internal` or `external` true are written.
+
+**UniFi Integration API** (base `https://<UNIFI_HOST>/proxy/network/integration/v1`, header `X-API-KEY`). Create, list and delete DNS policies under `sites/{siteId}/dns/policies`, type A, domain `<hostname>`, IPv4 `proxy_ip`. Confirm exact field names against [developer.ui.com](https://developer.ui.com/network/v10.1.84/creatednspolicy) in task 003. `sync` deletes only ids present in `ownership.json`.
+
+**Cloudflare API** (base `https://api.cloudflare.com/client/v4`, bearer `CF_API_TOKEN`):
+
+- Tunnel ingress: `PUT /accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations` with `config.ingress`. There is one entry per external route: `{"hostname": "<h>", "service": "https://traefik:443", "originRequest": {"originServerName": "<h>"}}`. The list ends with `{"service": "http_status:404"}`. The whole list is replaced on each change, so this tunnel must not be edited by hand.
+- DNS: `GET/POST/PATCH/DELETE /zones/{zone_id}/dns_records`. Each record is a CNAME `<h>` → `<tunnel_id>.cfargotunnel.com`, proxied, with comment `managed-by=umbrel-edge`. Records without that comment are never touched.
+- Access: `GET/POST/PUT/DELETE /accounts/{account_id}/access/apps`. Each app is named `umbrel-edge:<h>`, type `self_hosted`, domain `<h>`, session duration from config, with one include policy on `access.allowed_emails`.
+
+**Error shape inside `sync`.** Every client raises `StageError(stage: str, message: str, retriable: bool)`. `loop.py` catches it per stage and records it for `/healthz`. HTTP 429 and 5xx responses are retriable with exponential backoff (3 attempts). 4xx responses are not.
+
+## Risks and open questions
+
+- **Umbrel app auth on custom hostnames.** With app_proxy auth on, umbrelOS 2.0 redirects to its own login on port 2000 with its own certificate ([umbrel#2242](https://github.com/getumbrel/umbrel/issues/2242)). That is the one known source of certificate errors: every hostname Traefik and Cloudflare serve is covered by `*.DOMAIN`, but port 2000 is not. Task 006 tests this app by app. The fix is to turn app auth off for that app with `umbreld client apps.setSettings.mutate --appId <id> --appProxyAuthEnabled false`. Externally, Access then covers the app. Internally, anyone on Main could open it without a login until the identity-provider work adds Traefik forward-auth on the internal path, so do it per app and list the ones affected.
+- **The launcher script depends on the dashboard's link format.** If an umbrelOS update stops building links as `<host>:<port>`, apps open at the old address again until `launcher.js` is updated. The dashboard's Content-Security-Policy and response compression could also block or garble the injected tag. Task 007 checks both before relying on it.
+- **The app-data layout is assumed.** Task 002 confirms that each `app-data/<id>/umbrel-app.yml` exists and carries `port`. If it doesn't, discovery falls back to parsing `app_proxy` `PORT` from the app's `docker-compose.yml`.
+- **Host facts (recorded 1 October 2026).** umbrelOS 2.0 on the Dell, so 443 on the host is taken, which this design avoids. The LAN interface is `enp2s0`, the macvlan parent. The app mounts `${APP_DATA_DIR}/..` read-only for discovery, which also exposes other apps' data folders to `sync`; it never reads anything but `umbrel-app.yml`.
+- **The sync image is pulled from GHCR.** A package pushed from a private repo is private, and Umbrel's Docker has no GitHub login. Make the `umbrel-edge-sync` package public: the image holds code only, never secrets.
+- **UniFi API field names** for DNS policies are taken from third-party clients. Task 003 checks them against the official docs before writing the client.
+- **Macvlan MAC and IP stability.** The compose file pins `mac_address` and `ipv4_address`. UniFi also gets a reservation, so the gateway never hands `.4` to anything else.
+- **Apps that need raw TCP or UDP** (Transmission peers, WireGuard, Mosquitto) are not HTTP. They get no route, and only their web UI is proxied. Mosquitto has no web UI and is excluded by default.
+- **The domain is `bebitwise.dev`, shared with other uses.** `DOMAIN` above means `bebitwise.dev`, so apps live at `<app>.bebitwise.dev`. `home.bebitwise.dev` was the first choice, but `<app>.home.bebitwise.dev` is two levels deep and Cloudflare's free certificate only covers one level; Advanced Certificate Manager at $10 a month would fix that. The apex already serves a site through Cloudflare, so `sync` must never touch a record it did not create. A clash with an existing name (for example an app with id `www`) is logged as a conflict and that app gets no external route until it is given another subdomain in `edge.yaml`. `.dev` is on the HSTS preload list, so browsers refuse plain HTTP on every name. Traefik's port 80 only redirects, so nothing changes.
+- **The repo is private (`vyrmy/umbrel-edge`).** The Umbrel needs a read-only GitHub token to pull the app store, and GHCR images must either be public or pulled with the same token.
