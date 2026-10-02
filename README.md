@@ -25,6 +25,6 @@ EDGE_CONFIG=../vyrmy-edge/edge.example.yaml EDGE_APP_DATA_ROOT=tests/fixtures/ap
 
 ## Installing on the Umbrel
 
-1. Push to `main` and wait for the build. Make the `umbrel-edge-sync` package public in GitHub (Packages → Package settings → Change visibility).
-2. In Umbrel, App Store → ⋯ → Community App Stores, add `https://github.com/vyrmy/umbrel-edge`. A private repo needs a URL with a read-only token.
+1. Push to `main` and wait for the build. Check the `umbrel-edge-sync` package is public in GitHub (Packages → Package settings → Change visibility).
+2. In Umbrel, App Store → ⋯ → Community App Stores, add `https://github.com/vyrmy/umbrel-edge`.
 3. Install Edge, then create `data/secrets.env` (mode 0600) and `data/edge.yaml` in its data folder. The keys are listed under Secrets in the architecture doc.
