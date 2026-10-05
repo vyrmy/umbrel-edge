@@ -10,13 +10,13 @@ from typing import Any
 
 import httpx
 
+from umbrel_edge.http import request_json
 from umbrel_edge.models import DesiredState, StageError
 from umbrel_edge.ownership import Ownership
 
 log = logging.getLogger(__name__)
 
 STAGE = "unifi"
-ATTEMPTS = 3
 TTL_SECONDS = 300
 PAGE_SIZE = 200  # the documented maximum for the list endpoint
 
@@ -108,30 +108,9 @@ class UnifiClient:
     def _request(
         self, method: str, path: str, *, missing_ok: bool = False, **kwargs: Any
     ) -> dict[str, Any]:
-        last = ""
-        for attempt in range(ATTEMPTS):
-            if attempt:
-                self._sleep(2.0 ** (attempt - 1))
-            try:
-                resp = self._http.request(method, path, **kwargs)
-            except httpx.TransportError as exc:
-                last = f"{method} {path}: {exc}"
-                continue
-            if resp.status_code == 429 or resp.status_code >= 500:
-                last = f"{method} {path}: HTTP {resp.status_code}"
-                continue
-            if resp.status_code == 404 and missing_ok:
-                return {}
-            if resp.status_code >= 400:
-                raise StageError(STAGE, f"{method} {path}: HTTP {resp.status_code}")
-            if not resp.content:
-                return {}
-            try:
-                body = resp.json()
-            except ValueError as exc:
-                raise StageError(STAGE, f"{method} {path}: response is not JSON") from exc
-            return body if isinstance(body, dict) else {}
-        raise StageError(STAGE, f"{last} after {ATTEMPTS} attempts", retriable=True)
+        return request_json(
+            self._http, STAGE, method, path, sleep=self._sleep, missing_ok=missing_ok, **kwargs
+        )
 
 
 def _body(hostname: str, ip: str) -> dict[str, Any]:

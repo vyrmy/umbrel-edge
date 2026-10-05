@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass
 
-from umbrel_edge import desired, discovery, traefik_writer, unifi
+from umbrel_edge import cloudflare, desired, discovery, traefik_writer, unifi
 from umbrel_edge.config import Settings, load_edge_config
 from umbrel_edge.health import HealthState
 from umbrel_edge.models import DesiredState, EdgeConfig, StageError
@@ -45,6 +45,7 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
         except StageError as exc:
             log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
             errors.append(exc)
+        errors += _cloudflare(state, dry_run=True)
         return PassResult(state=state, errors=errors)
 
     try:
@@ -57,7 +58,8 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
     except StageError as exc:
         log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
         errors.append(exc)
-    # Tasks 004 and 005 add the Cloudflare stages here, each in its own try block.
+    errors += _cloudflare(state, dry_run=False)
+    # Task 005 adds the Access stage after these two, in its own try block.
     return PassResult(state=state, errors=errors)
 
 
@@ -79,6 +81,40 @@ def _unifi(state: DesiredState, config: EdgeConfig, settings: Settings, *, dry_r
         client.close()
     if dry_run:
         print(result.describe())
+
+
+def _cloudflare(state: DesiredState, *, dry_run: bool) -> list[StageError]:
+    """Tunnel ingress, then DNS, each in its own try block. Ingress goes first so a public name
+    never points at a tunnel that does not know it yet."""
+    creds = cloudflare.Credentials.from_env(os.environ)
+    if creds is None:
+        log.info(
+            "cloudflare stages skipped: CF_API_TOKEN, CF_ACCOUNT_ID, CF_ZONE_ID "
+            "or CF_TUNNEL_ID not set"
+        )
+        return []
+    errors: list[StageError] = []
+    client = cloudflare.CloudflareClient(creds)
+    try:
+        tunnel_ok = True
+        try:
+            plan = cloudflare.reconcile_tunnel(client, state, dry_run=dry_run)
+            if dry_run:
+                print(plan.describe())
+        except StageError as exc:
+            log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
+            errors.append(exc)
+            tunnel_ok = False
+        try:
+            dns_plan = cloudflare.reconcile_dns(client, state, dry_run=dry_run, publish=tunnel_ok)
+            if dry_run:
+                print(dns_plan.describe())
+        except StageError as exc:
+            log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
+            errors.append(exc)
+    finally:
+        client.close()
+    return errors
 
 
 def run_forever(settings: Settings, health: HealthState) -> None:

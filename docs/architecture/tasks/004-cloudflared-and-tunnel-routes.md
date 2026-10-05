@@ -36,3 +36,13 @@ Ingress list building, including the trailing 404 rule and stable ordering. No `
 
 ## Out of scope
 Cloudflare Access (task 005). Removing the old Umbrel Cloudflare Tunnel app (task 006).
+
+## Implementation notes
+- The contract in ARCHITECTURE.md is unchanged. Field names (`config.ingress`, `originRequest.originServerName`, DNS `comment`, `proxied`, `ttl: 1`) come from the Cloudflare API as I know it; I could not check them against the live docs in this run, so confirm during live acceptance.
+- `cloudflared` is pinned to `2026.9.3` with its multi-arch index digest. It reads `TUNNEL_TOKEN` from `secrets.env`. If that file or variable is missing it exits and restarts on failure until the owner adds it.
+- Stages are `cloudflare_tunnel` then `cloudflare_dns`, skipped with one info log per pass unless `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_ZONE_ID` and `CF_TUNNEL_ID` are all set.
+- The step 6 gate is the single function `published()` in `cloudflare.py`. Task 005 should make it return every external route and delete the held-back log.
+- If the tunnel stage fails, the DNS stage still runs but only deletes. It creates and updates nothing, so no public name points at a tunnel that may not know it.
+- The retry loop moved to `sync/src/umbrel_edge/http.py` and is shared with the UniFi client.
+- `noTLSVerify` is not set. Traefik presents the `*.DOMAIN` certificate and `originServerName` matches it. Setting it would only be needed if Traefik had no valid certificate yet (first start, before the DNS-01 challenge completes), and then only until the certificate arrives.
+- Live acceptance is still pending, so status stays "in-progress".
