@@ -39,3 +39,10 @@ Discovery on a fixture tree with one valid, one missing-port and one malformed m
 
 ## Out of scope
 The UniFi and Cloudflare API calls. The `ownership.json` file.
+
+## Acceptance results (5 October 2026, Edge 0.2.0)
+- Passed: sync writes 70 routes (every installed app except `mosquitto`, plus `umbrel`). `umbrel`, `jellyfin`, `excalidraw`, `ittools`, `home-assistant` and `vyrmy-edge` all answer on `192.168.10.4` with the wildcard certificate.
+- Passed by unit tests: subdomain override, collision naming both ids, the Home Assistant deny-list default, and `/healthz` 503 with stage `traefik` on a read-only directory.
+- Not yet passing, task 006: apps with Umbrel app auth on (Excalidraw, IT-Tools and others) redirect to `https://<app>.bebitwise.dev:2000/app-auth`, which nothing serves (umbrel#2242). Home Assistant returns 400 until its `trusted_proxies` is set.
+- Pending: install and uninstall Excalidraw to time the route appearing and going.
+- Root cause of the first deployment's missing routes: Docker created `data/` as root, so sync (uid 1000) could not create `data/traefik`. The `init` service now fixes ownership on every start.

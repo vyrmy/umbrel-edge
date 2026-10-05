@@ -1,7 +1,7 @@
 ---
 id: 007
 title: Umbrel dashboard opens apps at their own hostnames
-status: todo
+status: in-progress
 depends_on: [002]
 ---
 
@@ -54,3 +54,7 @@ Recorded on 5 October 2026 with read-only GETs against `http://192.168.10.2/` (T
 - Only the ports of the manifests are mapped, which is what the dashboard uses. A custom `upstream_port` in `edge.yaml` does not change the map.
 - Traefik's static config, plugin included, moved from `traefik/traefik.yml` into compose command flags, because an app update does not copy the `traefik/` folder. Updating the app delivers it.
 - The golden file is `sync/tests/fixtures/golden/umbrel-route.yml`. Regenerate it by hand if the middleware changes on purpose.
+
+## Acceptance results (5 October 2026, Edge 0.2.0)
+- Passed: the plugin loads ("Plugins loaded" in Traefik's log). A request to `umbrel.bebitwise.dev` with `Accept: text/html` gets the `<script src="/__edge/launcher.js">` tag, `/__edge/launcher.js` is served with `Cache-Control: no-cache`, and `jellyfin.bebitwise.dev` gets no injected script.
+- Pending: clicking apps on the dashboard in a browser, at home and through the tunnel.

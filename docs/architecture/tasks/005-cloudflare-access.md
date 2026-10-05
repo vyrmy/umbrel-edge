@@ -1,7 +1,7 @@
 ---
 id: 005
 title: Cloudflare Access in front of external routes
-status: todo
+status: in-progress
 depends_on: [004]
 ---
 
@@ -49,3 +49,7 @@ Service tokens, SSO providers, device posture checks.
 - A public name that already has an unmanaged DNS record is treated as a conflict for all three Cloudflare stages: no ingress entry, no Access app, no DNS change.
 - When an Access app cannot be created, a managed DNS record for that name is deleted, so it is never public without Access. A failure to list apps does not delete anything.
 - POSTs are not retried after a transport error other than a failed connection, because the resource may already exist. UniFi adopts an unowned record that matches the wanted address, and duplicate managed Access policies are deleted.
+
+## Acceptance results (5 October 2026, Edge 0.2.0)
+- Passed: with `defaults.external: false` and only `excalidraw` external, `https://excalidraw.bebitwise.dev` from outside redirects to the Access login at `round-wave-c00d.cloudflareaccess.com`. Tunnel ingress holds only that hostname plus the 404 rule.
+- Found: the zone already has a proxied wildcard `*.bebitwise.dev`, so every name resolves publicly (non-external names such as `jellyfin` give Cloudflare 525). This also explains the earlier 525 on `umbrel.bebitwise.dev`. Task 004's "NXDOMAIN for portainer" check cannot pass while it exists. The record is not sync's and is left alone.

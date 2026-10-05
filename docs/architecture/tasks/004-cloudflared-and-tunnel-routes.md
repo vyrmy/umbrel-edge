@@ -1,7 +1,7 @@
 ---
 id: 004
 title: cloudflared in the app, tunnel ingress and public DNS
-status: todo
+status: in-progress
 depends_on: [002]
 ---
 

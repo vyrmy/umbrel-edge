@@ -1,7 +1,7 @@
 ---
 id: 003
 title: Internal DNS records in UniFi
-status: todo
+status: in-progress
 depends_on: [002]
 ---
 
@@ -43,3 +43,6 @@ Cloudflare. Any UniFi firewall or network changes.
 - Deleting an already-missing record (404) counts as success.
 - Live acceptance is still pending, so status stays "in-progress".
 
+
+## Acceptance results (5 October 2026, Edge 0.2.0)
+- Blocked: every pass fails with `GET /dns/policies: HTTP 400` because `UNIFI_SITE_ID` is `default`. The Integration API wants the site's UUID from `GET /proxy/network/integration/v1/sites`. The other stages carry on, as designed.

@@ -43,3 +43,11 @@ Manual checks above. There is no code in this task.
 
 ## Out of scope
 The sync service, cloudflared, any Cloudflare DNS records, and the existing Umbrel Cloudflare Tunnel app.
+
+## Acceptance results (5 October 2026, Edge 0.2.0)
+- Passed: from the Mac on Main (`192.168.1.164`), `https://umbrel.bebitwise.dev` resolved to `192.168.10.4` returns the Umbrel login page (200). The certificate is issued to `bebitwise.dev` and `*.bebitwise.dev` by Let's Encrypt (YR2) and verifies.
+- Passed: Traefik's dashboard entrypoint `:8080` is not reachable from Main.
+- Pending, owner: Chrome on the Mac with no certificate warning. The Mac's Wi-Fi DNS is set by hand to `1.1.1.1`, which returns the public record instead of the UniFi one.
+- Pending, owner: a TCP connection from IoT to `192.168.10.4:443` times out.
+- Pending: after a Dell restart, Traefik is back at `.4` with the same certificate.
+- Before the 0.2.0 fixes, the reserved MAC sat on `umbrel_main_network` and Traefik's default route went through the host. From Main, TCP 443 still connected on the day, because replies left the host un-NATed with source `.4`.
