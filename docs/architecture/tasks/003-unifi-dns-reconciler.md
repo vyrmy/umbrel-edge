@@ -34,3 +34,12 @@ respx fakes covering create, update, delete, a conflict with an unowned record, 
 
 ## Out of scope
 Cloudflare. Any UniFi firewall or network changes.
+
+## Implementation notes
+- Endpoints and fields confirmed against the official OpenAPI document for Network 10.1.84, https://developer.ui.com/network/v10.1.84/openapi.json (the page https://developer.ui.com/network/v10.1.84/creatednspolicy renders from it). I could not fetch the 10.6 docs, but the contract in ARCHITECTURE.md matches, so it is unchanged. Paths: `GET`/`POST sites/{siteId}/dns/policies`, `GET`/`PUT`/`DELETE .../dns/policies/{dnsPolicyId}`. The list is paged (`offset`, `limit` up to 200, `totalCount`). Create and update both take `type: A_RECORD`, `enabled`, `domain`, `ipv4Address` and `ttlSeconds` (all required); sync sends a TTL of 300. Update is a full `PUT`.
+- The stage is skipped, with one info log per pass, unless `UNIFI_HOST`, `UNIFI_API_KEY` and `UNIFI_SITE_ID` are all set.
+- TLS verification is off for the UniFi client only.
+- A corrupt `ownership.json` fails the stage rather than resetting, so records are never orphaned. An owned id that has vanished from UniFi is forgotten, and recreated if still wanted.
+- Deleting an already-missing record (404) counts as success.
+- Live acceptance is still pending, so status stays "in-progress".
+
