@@ -59,9 +59,12 @@ class EdgeConfig(BaseModel):
     external_deny: list[str] = [
         "home-assistant",
         "portainer",
+        "arcane",
         "code-server",
         "termix",
+        "denny-olivetin",
         "torbrowser",
+        "denny-librewolf",
         "wireguard",
         "tailscale",
         "vyrmy-edge",

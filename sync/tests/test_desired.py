@@ -28,8 +28,9 @@ def test_deny_list_keeps_app_internal(config: EdgeConfig, app_data: Path) -> Non
     assert _hosts(config, app_data)["home-assistant.bebitwise.dev"] == (True, False, False)
 
 
-def test_default_deny_list_uses_umbrel_tor_browser_id(config: EdgeConfig) -> None:
-    state = build([AppManifest(id="torbrowser", name="Tor Browser", port=1)], config)
+@pytest.mark.parametrize("app_id", ["arcane", "denny-olivetin", "torbrowser", "denny-librewolf"])
+def test_default_deny_list_uses_umbrel_app_ids(config: EdgeConfig, app_id: str) -> None:
+    state = build([AppManifest(id=app_id, name=app_id, port=1)], config)
     assert state.routes[0].external is False
 
 

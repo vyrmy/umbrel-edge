@@ -14,9 +14,12 @@ defaults:
 external_deny:
   - home-assistant
   - portainer
+  - arcane
   - code-server
   - termix
+  - denny-olivetin
   - torbrowser
+  - denny-librewolf
   - wireguard
   - tailscale
   - vyrmy-edge
