@@ -45,4 +45,8 @@ Cloudflare. Any UniFi firewall or network changes.
 
 
 ## Acceptance results (5 October 2026, Edge 0.2.0)
-- Blocked: every pass fails with `GET /dns/policies: HTTP 400` because `UNIFI_SITE_ID` is `default`. The Integration API wants the site's UUID from `GET /proxy/network/integration/v1/sites`. The other stages carry on, as designed.
+- First run: every pass failed with `GET /dns/policies: HTTP 400` because `UNIFI_SITE_ID` was `default`. The Integration API wants the site's UUID from `GET /proxy/network/integration/v1/sites` (`id`; `internalReference` is `default`). The other stages carried on, as designed.
+- Passed after setting the UUID: sync created one A record per route, and all 69 hostnames for installed apps plus `umbrel` resolve to `192.168.10.4` through `192.168.1.1`.
+- Passed: the hand-made `umbrel.bebitwise.dev` record is logged as a conflict on every pass and left alone.
+- Found: `app-data/lobe-chat/umbrel-app.yml` is left over from an app that is no longer installed, so it got a route and a record pointing at a dead port. Discovery cannot tell installed apps from leftovers.
+- Pending: install and uninstall an app to time the record appearing and going.
