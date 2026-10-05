@@ -192,7 +192,7 @@ class EdgeConfig(BaseModel):
     defaults: Defaults = Defaults()
     external_deny: list[str] = [
         "home-assistant", "portainer", "code-server", "termix",
-        "tor-browser", "wireguard", "tailscale", "vyrmy-edge",
+        "torbrowser", "wireguard", "tailscale", "vyrmy-edge",
     ]
     exclude: list[str] = ["mosquitto"]   # apps to ignore entirely (no web UI)
     access: AccessSettings

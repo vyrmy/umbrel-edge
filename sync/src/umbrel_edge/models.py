@@ -61,7 +61,7 @@ class EdgeConfig(BaseModel):
         "portainer",
         "code-server",
         "termix",
-        "tor-browser",
+        "torbrowser",
         "wireguard",
         "tailscale",
         "vyrmy-edge",

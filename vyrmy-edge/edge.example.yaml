@@ -16,7 +16,7 @@ external_deny:
   - portainer
   - code-server
   - termix
-  - tor-browser
+  - torbrowser
   - wireguard
   - tailscale
   - vyrmy-edge

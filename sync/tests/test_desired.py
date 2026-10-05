@@ -28,6 +28,11 @@ def test_deny_list_keeps_app_internal(config: EdgeConfig, app_data: Path) -> Non
     assert _hosts(config, app_data)["home-assistant.bebitwise.dev"] == (True, False, False)
 
 
+def test_default_deny_list_uses_umbrel_tor_browser_id(config: EdgeConfig) -> None:
+    state = build([AppManifest(id="torbrowser", name="Tor Browser", port=1)], config)
+    assert state.routes[0].external is False
+
+
 def test_explicit_external_overrides_deny_list(config: EdgeConfig, app_data: Path) -> None:
     config.apps["home-assistant"] = AppPolicy(external=True)
     assert _hosts(config, app_data)["home-assistant.bebitwise.dev"] == (True, True, True)
