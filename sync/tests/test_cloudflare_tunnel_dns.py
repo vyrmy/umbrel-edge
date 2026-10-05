@@ -13,7 +13,7 @@ from umbrel_edge.cloudflare import (
     CloudflareClient,
     Credentials,
     build_ingress,
-    published,
+    external_routes,
     reconcile_dns,
     reconcile_tunnel,
 )
@@ -103,23 +103,13 @@ def test_ingress_with_no_routes_is_only_the_catch_all() -> None:
     assert build_ingress([]) == [{"service": "http_status:404"}]
 
 
-def test_gate_publishes_only_access_false_and_logs_the_rest(
-    caplog: pytest.LogCaptureFixture, client: CloudflareClient
-) -> None:
+def test_every_external_route_is_published_regardless_of_access() -> None:
     state = _state(
         _route("open.x.dev"),
         _route("gated.x.dev", access=True),
         _route("internal.x.dev", external=False),
     )
-    go, held = published(state)
-    assert [r.hostname for r in go] == ["open.x.dev"]
-    assert [r.hostname for r in held] == ["gated.x.dev"]
-    with respx.mock:
-        respx.get(TUNNEL).mock(return_value=_config())
-        respx.put(TUNNEL).mock(return_value=httpx.Response(200, json={"success": True}))
-        with caplog.at_level(logging.INFO, logger="umbrel_edge.cloudflare"):
-            reconcile_tunnel(client, state)
-    assert any(getattr(r, "hostname", "") == "gated.x.dev" for r in caplog.records)
+    assert [r.hostname for r in external_routes(state)] == ["open.x.dev", "gated.x.dev"]
 
 
 @respx.mock
@@ -253,11 +243,23 @@ def test_dns_dry_run_writes_nothing(client: CloudflareClient) -> None:
 
 
 @respx.mock
-def test_dns_gate_skips_access_routes(client: CloudflareClient) -> None:
+def test_dns_publishes_access_routes_too(client: CloudflareClient) -> None:
     respx.get(DNS).mock(return_value=_records())
-    post = respx.post(DNS)
+    post = respx.post(DNS).mock(return_value=httpx.Response(200, json={"success": True}))
     reconcile_dns(client, _state(_route("gated.x.dev", access=True)))
-    assert not post.called
+    assert post.called
+
+
+@respx.mock
+def test_dns_withheld_hostnames_are_neither_created_nor_updated(client: CloudflareClient) -> None:
+    respx.get(DNS).mock(
+        return_value=_records(_record("r1", "old.x.dev", content="wrong.example.com"))
+    )
+    post = respx.post(DNS).mock(return_value=httpx.Response(200, json={"success": True}))
+    patch = respx.patch(f"{DNS}/r1")
+    state = _state(_route("new.x.dev", access=True), _route("old.x.dev", access=True))
+    reconcile_dns(client, state, withheld=frozenset({"new.x.dev", "old.x.dev"}))
+    assert not post.called and not patch.called
 
 
 @respx.mock
@@ -353,6 +355,14 @@ def _set_cf(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(name, value)
 
 
+def _mock_access_in_sync() -> None:
+    respx.get(f"{API}/accounts/acc/access/apps").mock(return_value=_records())
+    respx.get(f"{API}/accounts/acc/access/policies").mock(return_value=_records())
+    ok = httpx.Response(200, json={"success": True, "result": {"id": "pol"}})
+    respx.post(f"{API}/accounts/acc/access/policies").mock(return_value=ok)
+    respx.post(f"{API}/accounts/acc/access/apps").mock(return_value=ok)
+
+
 def test_stages_skipped_without_secrets_log_once(
     tmp_path: Path,
     app_data: Path,
@@ -377,6 +387,7 @@ def test_tunnel_failure_isolated_and_stops_dns_publishing(
     _set_cf(monkeypatch)
     respx.get(TUNNEL).mock(return_value=httpx.Response(403))
     respx.get(DNS).mock(return_value=_records())
+    _mock_access_in_sync()
     post = respx.post(DNS)
     (tmp_path / "edge.yaml").write_text(_CONFIG)
     result = run_pass(_settings(tmp_path, app_data))
@@ -396,6 +407,8 @@ def test_dry_run_reads_only(
     _set_cf(monkeypatch)
     respx.get(TUNNEL).mock(return_value=_config())
     respx.get(DNS).mock(return_value=_records(_record("r1", "gone.x.dev")))
+    respx.get(f"{API}/accounts/acc/access/apps").mock(return_value=_records())
+    respx.get(f"{API}/accounts/acc/access/policies").mock(return_value=_records())
     (tmp_path / "edge.yaml").write_text(_CONFIG)
     result = run_pass(_settings(tmp_path, app_data), dry_run=True)
     assert result.ok

@@ -1,4 +1,4 @@
-"""Cloudflare client and reconcilers: tunnel ingress and public DNS (Access follows in task 005)."""
+"""Cloudflare client and reconcilers: tunnel ingress, public DNS and Access."""
 
 from __future__ import annotations
 
@@ -17,10 +17,13 @@ log = logging.getLogger(__name__)
 
 TUNNEL_STAGE = "cloudflare_tunnel"
 DNS_STAGE = "cloudflare_dns"
+ACCESS_STAGE = "cloudflare_access"
 BASE_URL = "https://api.cloudflare.com/client/v4"
 ORIGIN_SERVICE = "https://traefik:443"
 CATCH_ALL = {"service": "http_status:404"}
 MANAGED_COMMENT = "managed-by=umbrel-edge"
+ACCESS_PREFIX = "umbrel-edge:"
+POLICY_NAME = f"{ACCESS_PREFIX}allowed-emails"
 PAGE_SIZE = 100
 
 
@@ -47,23 +50,10 @@ class Credentials:
         return f"{self.tunnel_id}.cfargotunnel.com"
 
 
-def published(state: DesiredState) -> tuple[list[Route], list[Route]]:
-    """Split external routes into (published, held back).
-
-    Task 004 gate: until Cloudflare Access exists (task 005), a route with access true is not
-    published, so nothing goes public without a login in front. Task 005 deletes the filter and
-    returns every external route.
-    """
-    external = [r for r in state.routes if r.external]
-    return [r for r in external if not r.access], [r for r in external if r.access]
-
-
-def _log_held_back(held: list[Route]) -> None:
-    for route in held:
-        log.info(
-            "route not published: Access is not implemented yet",
-            extra={"hostname": route.hostname},
-        )
+def external_routes(state: DesiredState) -> list[Route]:
+    """Every route that is public. Those with access true are only published once their Access
+    app exists, which `loop.py` enforces by ordering the stages (see reconcile_access)."""
+    return [r for r in state.routes if r.external]
 
 
 class CloudflareClient:
@@ -109,12 +99,13 @@ class CloudflareClient:
         self._call(TUNNEL_STAGE, "PUT", self._tunnel_path, json={"config": {"ingress": ingress}})
 
     def list_dns_records(self) -> list[dict[str, Any]]:
+        return self._list_all(DNS_STAGE, self._dns_path)
+
+    def _list_all(self, stage: str, path: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         page = 1
         while True:
-            body = self._call(
-                DNS_STAGE, "GET", self._dns_path, params={"page": page, "per_page": PAGE_SIZE}
-            )
+            body = self._call(stage, "GET", path, params={"page": page, "per_page": PAGE_SIZE})
             result = body.get("result")
             out += [r for r in result if isinstance(r, dict)] if isinstance(result, list) else []
             info = body.get("result_info")
@@ -133,6 +124,41 @@ class CloudflareClient:
 
     def delete_dns(self, record_id: str) -> None:
         self._call(DNS_STAGE, "DELETE", f"{self._dns_path}/{record_id}", missing_ok=True)
+
+    @property
+    def _access_path(self) -> str:
+        return f"/accounts/{self._creds.account_id}/access"
+
+    def list_access_apps(self) -> list[dict[str, Any]]:
+        return self._list_all(ACCESS_STAGE, f"{self._access_path}/apps")
+
+    def create_access_app(self, body: dict[str, Any]) -> None:
+        self._call(ACCESS_STAGE, "POST", f"{self._access_path}/apps", json=body)
+
+    def update_access_app(self, app_id: str, body: dict[str, Any]) -> None:
+        self._call(ACCESS_STAGE, "PUT", f"{self._access_path}/apps/{app_id}", json=body)
+
+    def delete_access_app(self, app_id: str) -> None:
+        self._call(ACCESS_STAGE, "DELETE", f"{self._access_path}/apps/{app_id}", missing_ok=True)
+
+    def list_access_policies(self) -> list[dict[str, Any]]:
+        return self._list_all(ACCESS_STAGE, f"{self._access_path}/policies")
+
+    def create_access_policy(self, body: dict[str, Any]) -> str:
+        result = self._call(ACCESS_STAGE, "POST", f"{self._access_path}/policies", json=body)
+        inner = result.get("result")
+        policy_id = inner.get("id") if isinstance(inner, dict) else None
+        if not policy_id:
+            raise StageError(ACCESS_STAGE, "policy created but the response carried no id")
+        return str(policy_id)
+
+    def update_access_policy(self, policy_id: str, body: dict[str, Any]) -> None:
+        self._call(ACCESS_STAGE, "PUT", f"{self._access_path}/policies/{policy_id}", json=body)
+
+    def delete_access_policy(self, policy_id: str) -> None:
+        self._call(
+            ACCESS_STAGE, "DELETE", f"{self._access_path}/policies/{policy_id}", missing_ok=True
+        )
 
     def _dns_body(self, hostname: str) -> dict[str, Any]:
         return {
@@ -215,8 +241,7 @@ def plan_tunnel(routes: list[Route], current: list[dict[str, Any]]) -> TunnelPla
 def reconcile_tunnel(
     client: CloudflareClient, state: DesiredState, *, dry_run: bool = False
 ) -> TunnelPlan:
-    routes, held = published(state)
-    _log_held_back(held)
+    routes = external_routes(state)
     result = plan_tunnel(routes, client.get_ingress())
     if result.changed and not dry_run:
         client.put_ingress(result.ingress)
@@ -286,11 +311,13 @@ def reconcile_dns(
     *,
     dry_run: bool = False,
     publish: bool = True,
+    withheld: frozenset[str] = frozenset(),
 ) -> DnsPlan:
     """publish=False (the tunnel stage failed) suppresses creates and updates, so a public name
-    never points at a tunnel that may not know it yet. Deletions still run."""
-    routes, held = published(state)
-    _log_held_back(held)
+    never points at a tunnel that may not know it yet. `withheld` hostnames (an Access app that
+    is missing or could not be created) are never created or updated either. Deletions still
+    run."""
+    routes = external_routes(state)
     result = plan_dns(
         sorted({r.hostname for r in routes}),
         client.list_dns_records(),
@@ -302,6 +329,12 @@ def reconcile_dns(
         )
     if not publish:
         result.create, result.update = [], {}
+    held = {h.lower() for h in withheld}
+    for hostname in [h for h in result.create if h.lower() in held]:
+        result.create.remove(hostname)
+        log.info("dns record held back: no Access app yet", extra={"hostname": hostname})
+    for hostname in [h for h in result.update if h.lower() in held]:
+        del result.update[hostname]
     if dry_run:
         return result
     for hostname in result.create:
@@ -314,3 +347,186 @@ def reconcile_dns(
         client.delete_dns(record_id)
         log.info("dns record deleted", extra={"hostname": hostname})
     return result
+
+
+# --- Access ---------------------------------------------------------------------------------
+#
+# Policies are reusable: one allow policy named "umbrel-edge:allowed-emails" holds the address
+# list, and every app references it by id. Cloudflare's current guidance is reusable policies,
+# and app-scoped policies cannot be attached to new apps. It also means an address removed from
+# edge.yaml disappears from every app with a single PUT.
+
+
+def access_hostnames(state: DesiredState) -> list[str]:
+    return sorted({r.hostname for r in external_routes(state) if r.access})
+
+
+def _emails_of(policy: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    include = policy.get("include")
+    for rule in include if isinstance(include, list) else []:
+        email = rule.get("email") if isinstance(rule, dict) else None
+        if isinstance(email, dict) and email.get("email"):
+            out.append(str(email["email"]).lower())
+    return sorted(out)
+
+
+def _policy_body(emails: list[str]) -> dict[str, Any]:
+    return {
+        "name": POLICY_NAME,
+        "decision": "allow",
+        "include": [{"email": {"email": e}} for e in sorted(emails)],
+    }
+
+
+def _app_body(hostname: str, session_duration: str, policy_id: str) -> dict[str, Any]:
+    return {
+        "name": f"{ACCESS_PREFIX}{hostname}",
+        "type": "self_hosted",
+        "domain": hostname,
+        "session_duration": session_duration,
+        "policies": [{"id": policy_id, "precedence": 1}],
+    }
+
+
+def _policy_ids(app: dict[str, Any]) -> list[str]:
+    policies = app.get("policies")
+    return (
+        sorted(str(p["id"]) for p in policies if isinstance(p, dict) and "id" in p)
+        if (isinstance(policies, list))
+        else []
+    )
+
+
+@dataclass
+class AccessPlan:
+    emails: list[str]
+    session_duration: str
+    policy_id: str | None = None  # None until the policy exists
+    policy_action: str = ""  # "", "create", "update" or "delete"
+    create: list[str] = field(default_factory=list)
+    update: dict[str, str] = field(default_factory=dict)  # hostname -> app id
+    delete: dict[str, str] = field(default_factory=dict)  # hostname -> app id
+    conflicts: list[str] = field(default_factory=list)
+
+    @property
+    def missing(self) -> frozenset[str]:
+        """Hostnames with no usable Access app yet: DNS must wait for these."""
+        return frozenset(self.create)
+
+    def describe(self) -> str:
+        sign = {"create": "+", "update": "~", "delete": "-"}.get(self.policy_action)
+        lines = [f"{sign} policy {POLICY_NAME}"] if sign else []
+        lines += [f"+ access {h}" for h in sorted(self.create)]
+        lines += [f"~ access {h}" for h in sorted(self.update)]
+        lines += [f"- access {h}" for h in sorted(self.delete)]
+        lines += [f"! {h} has an unmanaged Access app; skipped" for h in sorted(self.conflicts)]
+        return "\n".join(lines) or "cloudflare_access: no changes"
+
+
+def plan_access(
+    want: list[str],
+    apps: list[dict[str, Any]],
+    policies: list[dict[str, Any]],
+    emails: list[str],
+    session_duration: str,
+) -> AccessPlan:
+    wanted_emails = sorted({e.lower() for e in emails})
+    plan = AccessPlan(emails=wanted_emails, session_duration=session_duration)
+    managed_policies = [p for p in policies if p.get("name") == POLICY_NAME]
+    policy = managed_policies[0] if managed_policies else None
+    if policy:
+        plan.policy_id = str(policy["id"])
+    if not want:
+        plan.policy_action = "delete" if policy else ""
+    elif policy is None:
+        plan.policy_action = "create"
+    elif _emails_of(policy) != wanted_emails or policy.get("decision") != "allow":
+        plan.policy_action = "update"
+
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for app in apps:
+        by_name.setdefault(str(app.get("name", "")), []).append(app)
+    unmanaged_domains = {
+        str(a.get("domain", "")).lower()
+        for a in apps
+        if not str(a.get("name", "")).startswith(ACCESS_PREFIX)
+    }
+    for hostname in want:
+        same = by_name.get(f"{ACCESS_PREFIX}{hostname}", [])
+        if not same:
+            if hostname.lower() in unmanaged_domains:
+                plan.conflicts.append(hostname)
+            else:
+                plan.create.append(hostname)
+            continue
+        first, *rest = same
+        stale = (
+            first.get("domain") != hostname
+            or first.get("type") != "self_hosted"
+            or first.get("session_duration") != session_duration
+            or plan.policy_id is None
+            or _policy_ids(first) != [plan.policy_id]
+        )
+        if stale:
+            plan.update[hostname] = str(first["id"])
+        for extra in rest:
+            plan.delete[f"{hostname} (duplicate {extra['id']})"] = str(extra["id"])
+    wanted = {h.lower() for h in want}
+    for name, group in by_name.items():
+        if name.startswith(ACCESS_PREFIX) and name[len(ACCESS_PREFIX) :].lower() not in wanted:
+            for app in group:
+                plan.delete[name[len(ACCESS_PREFIX) :]] = str(app["id"])
+    return plan
+
+
+def plan_access_from_api(
+    client: CloudflareClient,
+    state: DesiredState,
+    emails: list[str],
+    session_duration: str,
+) -> AccessPlan:
+    """Reads only."""
+    return plan_access(
+        access_hostnames(state),
+        client.list_access_apps(),
+        client.list_access_policies(),
+        emails,
+        session_duration,
+    )
+
+
+def apply_access_changes(client: CloudflareClient, plan: AccessPlan) -> None:
+    """The create phase. Runs before the DNS stage, so a new public name already has its Access
+    app. Policy first, because the apps reference its id."""
+    if plan.policy_action == "create":
+        plan.policy_id = client.create_access_policy(_policy_body(plan.emails))
+        log.info("access policy created", extra={"emails": len(plan.emails)})
+    elif plan.policy_action == "update" and plan.policy_id:
+        client.update_access_policy(plan.policy_id, _policy_body(plan.emails))
+        log.info("access policy updated", extra={"emails": len(plan.emails)})
+    for hostname in plan.conflicts:
+        log.warning(
+            "cloudflare access conflict: unmanaged app, skipped", extra={"hostname": hostname}
+        )
+    if not (plan.create or plan.update):
+        return
+    if plan.policy_id is None:
+        raise StageError(ACCESS_STAGE, "no allow policy to attach apps to")
+    for hostname in plan.create:
+        client.create_access_app(_app_body(hostname, plan.session_duration, plan.policy_id))
+        log.info("access app created", extra={"hostname": hostname})
+    for hostname, app_id in plan.update.items():
+        client.update_access_app(app_id, _app_body(hostname, plan.session_duration, plan.policy_id))
+        log.info("access app updated", extra={"hostname": hostname})
+
+
+def apply_access_deletions(client: CloudflareClient, plan: AccessPlan) -> None:
+    """The delete phase. Runs after the DNS stage, so a name is never public without its app.
+    The shared policy goes last, once nothing references it."""
+    for hostname, app_id in plan.delete.items():
+        client.delete_access_app(app_id)
+        log.info("access app deleted", extra={"hostname": hostname})
+    if plan.policy_action == "delete" and plan.policy_id:
+        client.delete_access_policy(plan.policy_id)
+        log.info("access policy deleted")

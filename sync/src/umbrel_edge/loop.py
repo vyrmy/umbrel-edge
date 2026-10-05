@@ -45,7 +45,7 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
         except StageError as exc:
             log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
             errors.append(exc)
-        errors += _cloudflare(state, dry_run=True)
+        errors += _cloudflare(state, config, dry_run=True)
         return PassResult(state=state, errors=errors)
 
     try:
@@ -58,8 +58,7 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
     except StageError as exc:
         log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
         errors.append(exc)
-    errors += _cloudflare(state, dry_run=False)
-    # Task 005 adds the Access stage after these two, in its own try block.
+    errors += _cloudflare(state, config, dry_run=False)
     return PassResult(state=state, errors=errors)
 
 
@@ -83,9 +82,11 @@ def _unifi(state: DesiredState, config: EdgeConfig, settings: Settings, *, dry_r
         print(result.describe())
 
 
-def _cloudflare(state: DesiredState, *, dry_run: bool) -> list[StageError]:
-    """Tunnel ingress, then DNS, each in its own try block. Ingress goes first so a public name
-    never points at a tunnel that does not know it yet."""
+def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> list[StageError]:
+    """Tunnel ingress, Access creation, DNS, then Access deletion, each in its own try block.
+    Ingress goes first so a public name never points at a tunnel that does not know it. Access
+    apps are created before DNS and deleted after it, so a name is never public without its app
+    when access is true."""
     creds = cloudflare.Credentials.from_env(os.environ)
     if creds is None:
         log.info(
@@ -94,6 +95,11 @@ def _cloudflare(state: DesiredState, *, dry_run: bool) -> list[StageError]:
         )
         return []
     errors: list[StageError] = []
+
+    def fail(exc: StageError) -> None:
+        log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
+        errors.append(exc)
+
     client = cloudflare.CloudflareClient(creds)
     try:
         tunnel_ok = True
@@ -102,16 +108,45 @@ def _cloudflare(state: DesiredState, *, dry_run: bool) -> list[StageError]:
             if dry_run:
                 print(plan.describe())
         except StageError as exc:
-            log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
-            errors.append(exc)
+            fail(exc)
             tunnel_ok = False
+
+        # Until the Access plan is known and applied, no access-true name may be published.
+        withheld = frozenset(cloudflare.access_hostnames(state))
+        access_plan: cloudflare.AccessPlan | None = None
         try:
-            dns_plan = cloudflare.reconcile_dns(client, state, dry_run=dry_run, publish=tunnel_ok)
+            access_plan = cloudflare.plan_access_from_api(
+                client, state, config.access.allowed_emails, config.access.session_duration
+            )
+            if dry_run:
+                print(access_plan.describe())
+            else:
+                cloudflare.apply_access_changes(client, access_plan)
+            withheld = frozenset()
+        except StageError as exc:
+            fail(exc)
+            if access_plan is not None:
+                # Apps that already existed are still protected; only new ones must wait.
+                withheld = access_plan.missing
+
+        try:
+            dns_plan = cloudflare.reconcile_dns(
+                client,
+                state,
+                dry_run=dry_run,
+                publish=tunnel_ok,
+                withheld=frozenset() if dry_run else withheld,
+            )
             if dry_run:
                 print(dns_plan.describe())
         except StageError as exc:
-            log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
-            errors.append(exc)
+            fail(exc)
+
+        if access_plan is not None and not dry_run:
+            try:
+                cloudflare.apply_access_deletions(client, access_plan)
+            except StageError as exc:
+                fail(exc)
     finally:
         client.close()
     return errors
