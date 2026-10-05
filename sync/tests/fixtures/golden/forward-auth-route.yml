@@ -16,6 +16,7 @@ middlewares:
       - X-authentik-meta-provider
       - X-authentik-meta-app
       - X-authentik-meta-version
+      maxResponseBodySize: 4194304
       trustForwardHeader: true
 routers:
   app-jellyfin:

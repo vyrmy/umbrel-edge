@@ -258,7 +258,7 @@ Rules applied in `desired.py`:
 
 Forward auth (decision 14), written only when at least one route has `forward_auth` true:
 
-- One middleware, `authentik`: `forwardAuth` with `address`, `trustForwardHeader: true` and `authResponseHeaders` from `forward_auth.response_headers`. Field names follow [Traefik's ForwardAuth reference](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/forwardauth/).
+- One middleware, `authentik`: `forwardAuth` with `address`, `trustForwardHeader: true`, `maxResponseBodySize: 4194304` (as in Authentik's Traefik template) and `authResponseHeaders` from `forward_auth.response_headers`. Field names follow [Traefik's ForwardAuth reference](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/forwardauth/).
 - Each protected route's router lists `authentik` first in `middlewares`.
 - Each protected hostname gets a router `outpost-<id>`: rule ``Host(`<hostname>`) && PathPrefix(`/outpost.goauthentik.io/`)``, priority 1000 (above any app router, whose priority is its rule length), no middleware, the same entrypoint and TLS as the app router, to one shared service `authentik-outpost` with loadBalancer server `forward_auth.outpost_url` and passHostHeader true.
 - When the `umbrel` dashboard route is protected, its middlewares are `authentik` then `launcher-inject`, so the body rewrite never sees a login redirect, and `edge-assets` and `edge-umbrel-fallback` get `authentik` too, so neither is a way round the login.

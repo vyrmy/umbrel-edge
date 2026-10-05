@@ -119,6 +119,8 @@ def _add_forward_auth(
             "address": settings.address,
             "trustForwardHeader": True,
             "authResponseHeaders": list(settings.response_headers),
+            # As in Authentik's Traefik template; unset, Traefik reads the response unbounded.
+            "maxResponseBodySize": 4194304,
         }
     }
     services[OUTPOST_SERVICE] = {
