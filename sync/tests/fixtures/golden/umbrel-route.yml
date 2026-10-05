@@ -38,6 +38,18 @@ routers:
       - main: bebitwise.dev
         sans:
         - '*.bebitwise.dev'
+  edge-umbrel-fallback:
+    entryPoints:
+    - websecure
+    priority: 1
+    rule: Host(`umbrel.bebitwise.dev`)
+    service: app-umbrel
+    tls:
+      certResolver: cloudflare
+      domains:
+      - main: bebitwise.dev
+        sans:
+        - '*.bebitwise.dev'
 services:
   edge-sync:
     loadBalancer:

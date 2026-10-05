@@ -28,18 +28,47 @@ services:
     depends_on:
       init:
         condition: service_completed_successfully
-    command: ["--configFile=/etc/traefik/traefik.yml"]
+    # All static configuration is here rather than in a file: an app update only copies
+    # docker-compose.yml (and a few other files) into app-data, never other folders.
+    command:
+      - --global.checknewversion=false
+      - --global.sendanonymoususage=false
+      - --log.level=INFO
+      - --accesslog=true
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.websecure.http.tls.certresolver=cloudflare
+      - --entrypoints.websecure.http.tls.domains[0].main=bebitwise.dev
+      - --entrypoints.websecure.http.tls.domains[0].sans=*.bebitwise.dev
+      # Dashboard for the Umbrel app page. Reached only from umbreld's app proxy.
+      - --entrypoints.dashboard.address=:8080
+      - --certificatesresolvers.cloudflare.acme.storage=/data/acme.json
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
+      - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+      # Body rewrite for the Umbrel dashboard launcher (task 007), downloaded at start.
+      # If the download or load fails, Traefik logs "Plugins are disabled" and starts
+      # anyway; only the umbrel router is dropped, and sync's fallback router serves the
+      # dashboard without the launcher.
+      - --experimental.abortonpluginfailure=false
+      - --experimental.plugins.rewrite-body.modulename=github.com/packruler/rewrite-body
+      - --experimental.plugins.rewrite-body.version=v1.2.0
+      - --providers.file.directory=/data/traefik/dynamic
+      - --providers.file.watch=true
     env_file:
       - path: ${APP_DATA_DIR}/data/secrets.env
         required: false
     volumes:
-      - ${APP_DATA_DIR}/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ${APP_DATA_DIR}/data:/data
     extra_hosts:
-      # The host, as seen from umbrel_main_network (10.21.0.0/16, fixed by umbrelOS).
+      # The host, as seen from umbrel_main_network. umbrelOS exports GATEWAY_IP to compose.
       # host-gateway would resolve to docker0, which is not directly attached here,
       # so once the default route is on the LAN it would be sent to the UniFi gateway.
-      - "host.docker.internal:10.21.0.1"
+      - "host.docker.internal:${GATEWAY_IP:-10.21.0.1}"
     networks:
       default: {}
       edge: {}
@@ -55,6 +84,7 @@ services:
   # so there is no config file. It reaches Traefik by name over the edge bridge.
   cloudflared:
     image: cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
+    # Exits without TUNNEL_TOKEN; Docker's backoff caps retries at one a minute until it is set.
     restart: on-failure
     command: tunnel --no-autoupdate run
     env_file:

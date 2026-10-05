@@ -52,3 +52,49 @@ def test_read_only_directory_raises_stage_error(
         assert exc.value.stage == "traefik"
     finally:
         tmp_path.chmod(0o700)
+
+
+def test_dashboard_entrypoint_only_admits_umbrel_main_network(
+    config: EdgeConfig, app_data: Path
+) -> None:
+    doc = yaml.safe_load(traefik_writer.render(_state(config, app_data), config.domain))
+    allow = doc["http"]["middlewares"]["docker-only"]["ipAllowList"]["sourceRange"]
+    # umbreld proxies the app page from the host side of umbrel_main_network.
+    assert allow == ["10.21.0.0/16"]
+
+
+COMPOSE = Path(__file__).parents[2] / "vyrmy-edge" / "docker-compose.yml"
+
+
+def _traefik_flags() -> dict[str, str]:
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    flags: dict[str, str] = {}
+    for arg in compose["services"]["traefik"]["command"]:
+        key, _, value = arg.removeprefix("--").partition("=")
+        flags[key.lower()] = value
+    return flags
+
+
+def test_static_config_lives_in_compose_flags() -> None:
+    # An app update only copies docker-compose.yml, so no static config file may be mounted.
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    traefik = compose["services"]["traefik"]
+    assert not any("traefik.yml" in v for v in traefik["volumes"])
+    assert not any(a.startswith("--configfile") for a in map(str.lower, traefik["command"]))
+
+
+def test_static_flags_match_what_the_writer_references(config: EdgeConfig, app_data: Path) -> None:
+    flags = _traefik_flags()
+    doc = yaml.safe_load(traefik_writer.render(_state(config, app_data), config.domain))["http"]
+    for router in doc["routers"].values():
+        for entrypoint in router["entryPoints"]:
+            assert f"entrypoints.{entrypoint}.address" in flags
+        if "tls" in router:
+            resolver = router["tls"]["certResolver"]
+            assert f"certificatesresolvers.{resolver}.acme.dnschallenge.provider" in flags
+    (plugin,) = doc["middlewares"]["launcher-inject"]["plugin"]
+    assert f"experimental.plugins.{plugin}.modulename" in flags
+    assert f"experimental.plugins.{plugin}.version" in flags
+    # A plugin that fails to download or load must not stop Traefik starting.
+    assert flags.get("experimental.abortonpluginfailure", "false") == "false"
+    assert flags["providers.file.directory"] == "/data/traefik/dynamic"

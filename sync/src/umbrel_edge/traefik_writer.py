@@ -14,14 +14,16 @@ from umbrel_edge.discovery import DASHBOARD
 from umbrel_edge.models import DesiredState, Route, StageError
 
 FILE_NAME = "apps.yml"
-# Docker networks only. The LAN (192.168.0.0/16) cannot reach the dashboard entrypoint.
-DASHBOARD_SOURCES = ["10.0.0.0/8", "172.16.0.0/12"]
+# umbrel_main_network only: umbreld proxies the app page to :8080 from 10.21.0.1.
+DASHBOARD_SOURCES = ["10.21.0.0/16"]
 # sync's own server, reached over the edge bridge (container names use the underscore form).
 SYNC_URL = "http://vyrmy-edge_sync_1:9000"
 LAUNCHER_PATH = "/__edge/"
 LAUNCHER_TAG = f'<script src="{LAUNCHER_PATH}launcher.js"></script>'
 # Wins over the umbrel router, whose rule is shorter.
 ASSETS_PRIORITY = 1000
+# Loses to the umbrel router (priority = rule length) while that router works.
+FALLBACK_PRIORITY = 1
 
 
 def render(state: DesiredState, domain: str) -> str:
@@ -64,6 +66,15 @@ def render(state: DesiredState, domain: str) -> str:
             "priority": ASSETS_PRIORITY,
             "entryPoints": ["websecure"],
             "service": "edge-sync",
+            "tls": _tls(domain),
+        }
+        # If the plugin fails to load, Traefik drops the umbrel router and this one takes
+        # over, so the dashboard loses only the launcher.
+        routers["edge-umbrel-fallback"] = {
+            "rule": f"Host(`{dashboard.hostname}`)",
+            "priority": FALLBACK_PRIORITY,
+            "entryPoints": ["websecure"],
+            "service": _name(dashboard),
             "tls": _tls(domain),
         }
         services["edge-sync"] = {"loadBalancer": {"servers": [{"url": SYNC_URL}]}}

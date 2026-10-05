@@ -9,7 +9,7 @@ The design, decisions and task list are in [docs/architecture](docs/architecture
 | Path | What it is |
 |---|---|
 | `umbrel-app-store.yml` | Store id `vyrmy` |
-| `vyrmy-edge/` | The Umbrel app: compose file, Traefik static config, example `edge.yaml` |
+| `vyrmy-edge/` | The Umbrel app: compose file (Traefik static config is its command flags), example `edge.yaml` |
 | `sync/` | The Python reconciler, built into `ghcr.io/vyrmy/umbrel-edge-sync` |
 | `.github/workflows/build.yml` | Lint, type-check, test, then push the image on `main` |
 
