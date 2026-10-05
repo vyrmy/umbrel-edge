@@ -7,9 +7,27 @@ services:
       APP_HOST: vyrmy-edge_traefik_1
       APP_PORT: 8080
 
+  # Docker creates a missing bind-mount source as root, but sync runs as uid 1000.
+  # Make sure the directories sync writes to exist and belong to it. Reuses the
+  # Traefik image (Alpine) so nothing extra is pulled.
+  init:
+    image: traefik:v3.7.13
+    restart: "no"
+    user: "0:0"
+    entrypoint:
+      - sh
+      - -c
+      - mkdir -p /data/traefik/dynamic /data/state && chown 1000:1000 /data/traefik /data/traefik/dynamic /data/state
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+    network_mode: none
+
   traefik:
     image: traefik:v3.7.13
     restart: on-failure
+    depends_on:
+      init:
+        condition: service_completed_successfully
     command: ["--configFile=/etc/traefik/traefik.yml"]
     env_file:
       - path: ${APP_DATA_DIR}/data/secrets.env
@@ -29,6 +47,9 @@ services:
   sync:
     image: ghcr.io/vyrmy/umbrel-edge-sync:main@sha256:60027c0b7c049bff1dcd653de4b3b8d7f56c932e331a5851f1b57b110b096154
     restart: on-failure
+    depends_on:
+      init:
+        condition: service_completed_successfully
     env_file:
       - path: ${APP_DATA_DIR}/data/secrets.env
         required: false

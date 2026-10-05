@@ -32,6 +32,7 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
         manifests = discovery.discover(settings.app_data_root)
         state = desired.build(manifests, config)
     except StageError as exc:
+        log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
         return PassResult(state=None, errors=[exc])
 
     if dry_run:
