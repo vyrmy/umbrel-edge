@@ -31,7 +31,9 @@ releaseNotes: >-
   192.168.10.4 through a small helper interface on 192.168.10.5. Apps can
   now call other apps by their bebitwise.dev hostnames, which sign-in
   through Authentik needs. Turn off external DNS in the Umbrel's network
-  settings so those names resolve to the proxy.
+  settings so those names resolve to the proxy. Sync now keeps Tor Browser,
+  Arcane, OliveTin and LibreWolf off the internet unless edge.yaml says
+  otherwise.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""
