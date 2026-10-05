@@ -36,13 +36,20 @@ services:
       - ${APP_DATA_DIR}/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ${APP_DATA_DIR}/data:/data
     extra_hosts:
-      - "host.docker.internal:host-gateway"
-    mac_address: "02:42:c0:a8:0a:04"
+      # The host, as seen from umbrel_main_network (10.21.0.0/16, fixed by umbrelOS).
+      # host-gateway would resolve to docker0, which is not directly attached here,
+      # so once the default route is on the LAN it would be sent to the UniFi gateway.
+      - "host.docker.internal:10.21.0.1"
     networks:
       default: {}
       edge: {}
       lan:
         ipv4_address: 192.168.10.4
+        # Per network: a service-level mac_address lands on the first network (default).
+        mac_address: "02:42:c0:a8:0a:04"
+        # Default route via 192.168.10.1, so replies to Main and VPN clients leave from
+        # 192.168.10.4 rather than being NATed out through the host. Needs Engine 28+.
+        gw_priority: 1
 
   # Outbound-only tunnel connector. Ingress comes from the Cloudflare API (written by sync),
   # so there is no config file. It reaches Traefik by name over the edge bridge.
