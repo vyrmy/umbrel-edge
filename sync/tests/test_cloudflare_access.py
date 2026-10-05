@@ -172,6 +172,8 @@ def test_requests_use_reusable_policy_and_prefixed_names(client: CloudflareClien
         "name": POLICY_NAME,
         "decision": "allow",
         "include": [{"email": {"email": "me@example.com"}}],
+        "exclude": [],
+        "require": [],
     }
     assert json.loads(app.calls[0].request.content) == {
         "name": "umbrel-edge:a.x.dev",
@@ -464,3 +466,81 @@ def test_policy_post_is_not_retried_after_a_read_timeout(client: CloudflareClien
         client.create_access_policy({"name": POLICY_NAME})
     assert post.call_count == 1
     assert err.value.retriable
+
+
+# --- policy drift ---
+
+
+def test_added_include_rule_is_drift() -> None:
+    policy = _policy()
+    policy["include"].append({"everyone": {}})
+    plan = plan_access(["a.x.dev"], [_app("a.x.dev")], [policy], EMAILS, "24h")
+    assert plan.policy_action == "update"
+
+
+@pytest.mark.parametrize("key", ["exclude", "require"])
+def test_non_empty_exclude_or_require_is_drift(key: str) -> None:
+    policy = _policy() | {key: [{"email": {"email": "other@example.com"}}]}
+    plan = plan_access(["a.x.dev"], [_app("a.x.dev")], [policy], EMAILS, "24h")
+    assert plan.policy_action == "update"
+
+
+def test_include_order_and_email_case_are_not_drift() -> None:
+    emails = ["b@example.com", "a@example.com"]
+    policy = _policy(["B@example.com", "a@example.com"]) | {"exclude": [], "require": []}
+    plan = plan_access(["a.x.dev"], [_app("a.x.dev")], [policy], emails, "24h")
+    assert plan.policy_action == ""
+
+
+@respx.mock
+def test_drifted_policy_is_put_back_to_what_sync_writes(client: CloudflareClient) -> None:
+    policy = _policy() | {"exclude": [{"everyone": {}}]}
+    policy["include"].append({"everyone": {}})
+    respx.get(APPS).mock(return_value=_page(_app("a.x.dev")))
+    respx.get(POLICIES).mock(return_value=_page(policy))
+    put = respx.put(f"{POLICIES}/pol").mock(return_value=OK)
+    plan = plan_access_from_api(client, DesiredState(routes=[_route("a.x.dev")]), EMAILS, "24h")
+    apply_access_changes(client, plan)
+    body = json.loads(put.calls.last.request.content)
+    assert body["include"] == [{"email": {"email": "me@example.com"}}]
+    assert body["exclude"] == [] and body["require"] == []
+
+
+# --- partial failure ---
+
+
+@respx.mock
+def test_app_created_before_a_later_create_fails_keeps_its_dns(
+    tmp_path: Path, app_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env(monkeypatch)
+    (tmp_path / "edge.yaml").write_text(_CONFIG)
+    respx.get(TUNNEL).mock(
+        return_value=httpx.Response(200, json={"success": True, "result": {"config": {}}})
+    )
+    respx.put(TUNNEL).mock(return_value=OK)
+    managed = {
+        "type": "CNAME",
+        "content": "tun.cfargotunnel.com",
+        "proxied": True,
+        "comment": "managed-by=umbrel-edge",
+    }
+    respx.get(DNS).mock(
+        return_value=_page(
+            {"id": "dj", "name": "jellyfin.bebitwise.dev"} | managed,
+            {"id": "du", "name": "umbrel.bebitwise.dev"} | managed,
+        )
+    )
+    respx.get(APPS).mock(return_value=_page())
+    respx.get(POLICIES).mock(return_value=_page(_policy()))
+    # Creates run in hostname order: jellyfin succeeds, then umbrel fails.
+    post_apps = respx.post(APPS).mock(side_effect=[OK, httpx.Response(403)])
+    delete_jellyfin = respx.delete(f"{DNS}/dj").mock(return_value=OK)
+    delete_umbrel = respx.delete(f"{DNS}/du").mock(return_value=OK)
+
+    result = run_pass(_settings(tmp_path, app_data))
+
+    assert [e.stage for e in result.errors] == ["cloudflare_access"]
+    assert post_apps.call_count == 2
+    assert not delete_jellyfin.called
+    assert delete_umbrel.called

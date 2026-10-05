@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -383,14 +384,27 @@ def access_hostnames(state: DesiredState) -> list[str]:
     return sorted({r.hostname for r in external_routes(state) if r.access})
 
 
-def _emails_of(policy: dict[str, Any]) -> list[str]:
-    out: list[str] = []
-    include = policy.get("include")
-    for rule in include if isinstance(include, list) else []:
-        email = rule.get("email") if isinstance(rule, dict) else None
-        if isinstance(email, dict) and email.get("email"):
-            out.append(str(email["email"]).lower())
-    return sorted(out)
+def _rule_key(rule: Any) -> str:
+    """One include, exclude or require rule in a form that compares equal however Cloudflare
+    orders its keys or cases an address."""
+    if isinstance(rule, dict) and set(rule) == {"email"} and isinstance(rule["email"], dict):
+        email = rule["email"].get("email")
+        if isinstance(email, str) and set(rule["email"]) == {"email"}:
+            return json.dumps({"email": {"email": email.lower()}})
+    return json.dumps(rule, sort_keys=True)
+
+
+def _rules(policy: dict[str, Any], key: str) -> list[str]:
+    rules = policy.get(key)
+    return sorted(_rule_key(r) for r in rules) if isinstance(rules, list) else []
+
+
+def _policy_drifted(policy: dict[str, Any], body: dict[str, Any]) -> bool:
+    """Anything in the managed policy beyond what sync writes widens or narrows who gets in, so
+    the whole include list is compared, and exclude and require must be empty."""
+    return policy.get("decision") != body["decision"] or any(
+        _rules(policy, key) != _rules(body, key) for key in ("include", "exclude", "require")
+    )
 
 
 def _policy_body(emails: list[str]) -> dict[str, Any]:
@@ -398,6 +412,8 @@ def _policy_body(emails: list[str]) -> dict[str, Any]:
         "name": POLICY_NAME,
         "decision": "allow",
         "include": [{"email": {"email": e}} for e in sorted(emails)],
+        "exclude": [],
+        "require": [],
     }
 
 
@@ -431,11 +447,13 @@ class AccessPlan:
     delete: dict[str, str] = field(default_factory=dict)  # hostname -> app id
     conflicts: list[str] = field(default_factory=list)
     extra_policies: list[str] = field(default_factory=list)  # duplicate managed policy ids
+    created: list[str] = field(default_factory=list)  # creates that succeeded in this pass
 
     @property
     def missing(self) -> frozenset[str]:
-        """Hostnames with no usable Access app yet: DNS must wait for these."""
-        return frozenset(self.create)
+        """Hostnames with no usable Access app yet: DNS must wait for these. An app created
+        earlier in a pass that then failed protects its name, so it is no longer missing."""
+        return frozenset(self.create) - frozenset(self.created)
 
     def describe(self) -> str:
         sign = {"create": "+", "update": "~", "delete": "-"}.get(self.policy_action)
@@ -466,7 +484,7 @@ def plan_access(
         plan.policy_action = "delete" if policy else ""
     elif policy is None:
         plan.policy_action = "create"
-    elif _emails_of(policy) != wanted_emails or policy.get("decision") != "allow":
+    elif _policy_drifted(policy, _policy_body(wanted_emails)):
         plan.policy_action = "update"
 
     by_name: dict[str, list[dict[str, Any]]] = {}
@@ -540,6 +558,7 @@ def apply_access_changes(client: CloudflareClient, plan: AccessPlan) -> None:
         raise StageError(ACCESS_STAGE, "no allow policy to attach apps to")
     for hostname in plan.create:
         client.create_access_app(_app_body(hostname, plan.session_duration, plan.policy_id))
+        plan.created.append(hostname)
         log.info("access app created", extra={"hostname": hostname})
     for hostname, app_id in plan.update.items():
         client.update_access_app(app_id, _app_body(hostname, plan.session_duration, plan.policy_id))

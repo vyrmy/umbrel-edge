@@ -1,4 +1,5 @@
-"""Shared HTTP retry policy: 429 and 5xx retry with backoff, other 4xx do not."""
+"""Shared HTTP retry policy: 429 and 5xx retry with backoff, other 4xx do not, and a POST
+that may have reached the server is never repeated."""
 
 from __future__ import annotations
 
@@ -40,6 +41,10 @@ def request_json(
             continue
         if resp.status_code == 429 or resp.status_code >= 500:
             last = f"{method} {path}: HTTP {resp.status_code}"
+            # A 5xx POST may have been carried out before the server failed, so it is not
+            # repeated either. A 429 was refused before any work, so it is.
+            if method == "POST" and resp.status_code != 429:
+                raise StageError(stage, last, retriable=True)
             continue
         if resp.status_code == 404 and missing_ok:
             return {}
@@ -50,6 +55,9 @@ def request_json(
         try:
             body = resp.json()
         except ValueError as exc:
-            raise StageError(stage, f"{method} {path}: response is not JSON") from exc
+            # The request succeeded, so the next pass may well find its result: retriable.
+            raise StageError(
+                stage, f"{method} {path}: response is not JSON", retriable=True
+            ) from exc
         return body if isinstance(body, dict) else {}
     raise StageError(stage, f"{last} after {ATTEMPTS} attempts", retriable=True)

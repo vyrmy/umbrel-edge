@@ -1,4 +1,9 @@
-"""ownership.json: the UniFi DNS policy ids this service created, keyed by hostname."""
+"""ownership.json: the UniFi DNS policy ids this service created, keyed by hostname.
+
+Version 2 adds `pending`: hostnames whose create was about to be sent. It is written before the
+POST and cleared once the id is stored, so a record created by a POST whose response was lost,
+or whose id never reached disk, can be recognised as ours on the next pass. Version 1 files have
+no `pending` and still load."""
 
 from __future__ import annotations
 
@@ -10,13 +15,20 @@ from pathlib import Path
 from umbrel_edge.models import StageError
 
 FILE_NAME = "ownership.json"
-VERSION = 1
+VERSION = 2
+KNOWN_VERSIONS = (1, 2)
 
 
 class Ownership:
-    def __init__(self, path: Path, records: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        records: dict[str, str] | None = None,
+        pending: set[str] | None = None,
+    ) -> None:
         self.path = path
         self.unifi_records: dict[str, str] = dict(records or {})
+        self.pending: set[str] = set(pending or ())
 
     @classmethod
     def load(cls, state_dir: Path) -> Ownership:
@@ -28,17 +40,29 @@ class Ownership:
         except (OSError, ValueError) as exc:
             # Never start again from empty: that would orphan every record we created.
             raise StageError("unifi", f"cannot read {path}: {exc}") from exc
-        records = raw.get("unifi_records") if isinstance(raw, dict) else None
-        if not isinstance(records, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in records.items()
+        if not isinstance(raw, dict) or raw.get("version", 1) not in KNOWN_VERSIONS:
+            raise StageError("unifi", f"{path} is not a valid ownership file")
+        records = raw.get("unifi_records")
+        pending = raw.get("pending", [])
+        if (
+            not isinstance(records, dict)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in records.items())
+            or not isinstance(pending, list)
+            or not all(isinstance(h, str) for h in pending)
         ):
             raise StageError("unifi", f"{path} is not a valid ownership file")
-        return cls(path, records)
+        return cls(path, records, set(pending))
 
     def save(self) -> None:
         """Atomic write: temp file, fsync, rename."""
         content = json.dumps(
-            {"version": VERSION, "unifi_records": self.unifi_records}, indent=2, sort_keys=True
+            {
+                "version": VERSION,
+                "unifi_records": self.unifi_records,
+                "pending": sorted(self.pending),
+            },
+            indent=2,
+            sort_keys=True,
         )
         directory = self.path.parent
         try:

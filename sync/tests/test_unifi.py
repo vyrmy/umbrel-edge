@@ -71,7 +71,7 @@ def test_create_records_ownership(client: UnifiClient, tmp_path: Path) -> None:
     }
     assert post.calls[0].request.headers["X-API-KEY"] == "key"
     saved = json.loads((tmp_path / "ownership.json").read_text())
-    assert saved == {"version": 1, "unifi_records": {"a.example.com": "p1"}}
+    assert saved == {"version": 2, "unifi_records": {"a.example.com": "p1"}, "pending": []}
 
 
 @respx.mock
@@ -200,6 +200,36 @@ def test_stage_skipped_without_secrets(
     assert sum("unifi stage skipped" in r.getMessage() for r in caplog.records) == 1
 
 
+CF_API = "https://api.cloudflare.com/client/v4"
+CF_OK = httpx.Response(200, json={"success": True, "result": {"id": "pol"}})
+
+
+def _cf_env_and_mocks(monkeypatch: pytest.MonkeyPatch) -> dict[str, respx.Route]:
+    for name, value in (
+        ("CF_API_TOKEN", "tok"),
+        ("CF_ACCOUNT_ID", "acc"),
+        ("CF_ZONE_ID", "zone"),
+        ("CF_TUNNEL_ID", "tun"),
+    ):
+        monkeypatch.setenv(name, value)
+    empty = httpx.Response(
+        200, json={"success": True, "result": [], "result_info": {"total_pages": 1}}
+    )
+    tunnel = f"{CF_API}/accounts/acc/cfd_tunnel/tun/configurations"
+    respx.get(tunnel).mock(
+        return_value=httpx.Response(200, json={"success": True, "result": {"config": {}}})
+    )
+    respx.get(f"{CF_API}/zones/zone/dns_records").mock(return_value=empty)
+    respx.get(f"{CF_API}/accounts/acc/access/apps").mock(return_value=empty)
+    respx.get(f"{CF_API}/accounts/acc/access/policies").mock(return_value=empty)
+    respx.post(f"{CF_API}/accounts/acc/access/policies").mock(return_value=CF_OK)
+    respx.post(f"{CF_API}/accounts/acc/access/apps").mock(return_value=CF_OK)
+    return {
+        "tunnel": respx.put(tunnel).mock(return_value=CF_OK),
+        "dns": respx.post(f"{CF_API}/zones/zone/dns_records").mock(return_value=CF_OK),
+    }
+
+
 @respx.mock
 def test_unifi_failure_does_not_stop_traefik(
     tmp_path: Path, app_data: Path, monkeypatch: pytest.MonkeyPatch
@@ -208,24 +238,33 @@ def test_unifi_failure_does_not_stop_traefik(
     monkeypatch.setenv("UNIFI_API_KEY", "key")
     monkeypatch.setenv("UNIFI_SITE_ID", "site-1")
     respx.get(BASE).mock(return_value=httpx.Response(401))
+    cf = _cf_env_and_mocks(monkeypatch)
     (tmp_path / "edge.yaml").write_text(_CONFIG)
     result = run_pass(_settings(tmp_path, app_data))
     assert [e.stage for e in result.errors] == ["unifi"]
     assert (tmp_path / "dynamic" / "apps.yml").exists()
+    # The Cloudflare stages run after UniFi, so these prove the failure did not end the pass.
+    assert cf["tunnel"].called
+    assert cf["dns"].called
 
 
 @respx.mock
-def test_own_lost_record_is_adopted(client: UnifiClient, tmp_path: Path) -> None:
-    respx.get(BASE).mock(return_value=_page(_record("lost", "a.example.com")))
+def test_hand_made_record_with_the_proxy_ip_stays_a_conflict(
+    client: UnifiClient, tmp_path: Path
+) -> None:
+    respx.get(BASE).mock(return_value=_page(_record("hand", "umbrel.bebitwise.dev")))
     own = _own(tmp_path)
-    result = reconcile(client, _state("a.example.com"), IP, own)
-    assert result.adopt == {"a.example.com": "lost"}
-    assert result.conflicts == []
+    for _ in range(2):
+        result = reconcile(client, _state("umbrel.bebitwise.dev"), IP, own)
+        assert result.conflicts == ["umbrel.bebitwise.dev"]
+        assert result.adopt == {}
+    # The route goes: the record is still not ours, so it is left alone.
+    result = reconcile(client, DesiredState(routes=[]), IP, own)
+    assert result.empty
     assert [m for m in respx.calls if m.request.method != "GET"] == []
-    assert own.unifi_records == {"a.example.com": "lost"}
-    assert json.loads((tmp_path / "ownership.json").read_text())["unifi_records"] == {
-        "a.example.com": "lost"
-    }
+    assert own.unifi_records == {}
+    assert own.pending == set()
+    assert not (tmp_path / "ownership.json").exists()
 
 
 @respx.mock
@@ -236,3 +275,176 @@ def test_create_is_not_retried_after_a_read_timeout(client: UnifiClient, tmp_pat
         reconcile(client, _state("a.example.com"), IP, _own(tmp_path))
     assert post.call_count == 1
     assert err.value.retriable
+
+
+@respx.mock
+def test_lost_create_response_is_adopted_on_the_next_pass(
+    client: UnifiClient, tmp_path: Path
+) -> None:
+    # The server creates the record but the response never arrives.
+    respx.get(BASE).mock(side_effect=[_page(), _page(_record("lost", "a.example.com"))])
+    post = respx.post(BASE).mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(StageError):
+        reconcile(client, _state("a.example.com"), IP, _own(tmp_path))
+    own = Ownership.load(tmp_path)
+    assert own.pending == {"a.example.com"}
+
+    result = reconcile(client, _state("a.example.com"), IP, own)
+
+    assert result.adopt == {"a.example.com": "lost"}
+    assert result.conflicts == []
+    assert post.call_count == 1
+    again = Ownership.load(tmp_path)
+    assert again.unifi_records == {"a.example.com": "lost"}
+    assert again.pending == set()
+
+
+class _Crash(BaseException):
+    pass
+
+
+@respx.mock
+def test_crash_between_create_and_save_is_adopted_on_the_next_pass(
+    client: UnifiClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.get(BASE).mock(side_effect=[_page(), _page(_record("p1", "a.example.com"))])
+    post = respx.post(BASE).mock(return_value=httpx.Response(201, json={"id": "p1"}))
+    real_save = Ownership.save
+    saves: list[int] = []
+
+    def crash_after_post(self: Ownership) -> None:
+        if post.called:
+            raise _Crash
+        saves.append(1)
+        real_save(self)
+
+    monkeypatch.setattr(Ownership, "save", crash_after_post)
+    with pytest.raises(_Crash):
+        reconcile(client, _state("a.example.com"), IP, _own(tmp_path))
+    assert saves == [1]
+    monkeypatch.setattr(Ownership, "save", real_save)
+
+    own = Ownership.load(tmp_path)
+    assert own.unifi_records == {} and own.pending == {"a.example.com"}
+    result = reconcile(client, _state("a.example.com"), IP, own)
+
+    assert result.adopt == {"a.example.com": "p1"}
+    assert post.call_count == 1
+    again = Ownership.load(tmp_path)
+    assert again.unifi_records == {"a.example.com": "p1"}
+    assert again.pending == set()
+
+
+@respx.mock
+def test_pending_with_no_record_is_retried(client: UnifiClient, tmp_path: Path) -> None:
+    respx.get(BASE).mock(return_value=_page())
+    post = respx.post(BASE).mock(return_value=httpx.Response(201, json={"id": "p1"}))
+    own = _own(tmp_path)
+    own.pending.add("a.example.com")
+    reconcile(client, _state("a.example.com"), IP, own)
+    assert post.call_count == 1
+    assert Ownership.load(tmp_path).unifi_records == {"a.example.com": "p1"}
+    assert Ownership.load(tmp_path).pending == set()
+
+
+@respx.mock
+def test_pending_is_cleared_when_no_longer_wanted(client: UnifiClient, tmp_path: Path) -> None:
+    respx.get(BASE).mock(return_value=_page())
+    own = _own(tmp_path)
+    own.pending.add("a.example.com")
+    result = reconcile(client, DesiredState(routes=[]), IP, own)
+    assert result.clear_pending == ["a.example.com"]
+    assert [m for m in respx.calls if m.request.method != "GET"] == []
+    assert Ownership.load(tmp_path).pending == set()
+
+
+@respx.mock
+def test_pending_lost_record_no_longer_wanted_is_adopted_then_deleted(
+    client: UnifiClient, tmp_path: Path
+) -> None:
+    respx.get(BASE).mock(return_value=_page(_record("lost", "a.example.com")))
+    delete = respx.delete(f"{BASE}/lost").mock(return_value=httpx.Response(200))
+    own = _own(tmp_path)
+    own.pending.add("a.example.com")
+    reconcile(client, DesiredState(routes=[]), IP, own)
+    assert delete.call_count == 1
+    saved = Ownership.load(tmp_path)
+    assert saved.unifi_records == {} and saved.pending == set()
+
+
+@respx.mock
+def test_pending_name_with_a_different_address_is_not_adopted(
+    client: UnifiClient, tmp_path: Path
+) -> None:
+    respx.get(BASE).mock(return_value=_page(_record("hand", "a.example.com", "10.0.0.9")))
+    own = _own(tmp_path)
+    own.pending.add("a.example.com")
+    for state in (_state("a.example.com"), DesiredState(routes=[])):
+        result = reconcile(client, state, IP, own)
+        assert result.adopt == {}
+    assert [m for m in respx.calls if m.request.method != "GET"] == []
+    assert own.unifi_records == {}
+    assert own.pending == set()
+
+
+@respx.mock
+def test_rejected_create_clears_pending_so_a_later_hand_made_record_is_never_adopted(
+    client: UnifiClient, tmp_path: Path
+) -> None:
+    # Pass 1: UniFi refuses the create outright, so nothing exists to recover.
+    respx.get(BASE).mock(
+        side_effect=[
+            _page(),
+            _page(_record("hand", "a.example.com")),
+            _page(_record("hand", "a.example.com")),
+        ]
+    )
+    respx.post(BASE).mock(return_value=httpx.Response(403))
+    own = _own(tmp_path)
+    with pytest.raises(StageError) as err:
+        reconcile(client, _state("a.example.com"), IP, own)
+    assert not err.value.retriable
+    assert Ownership.load(tmp_path).pending == set()
+
+    # The owner then makes the record by hand: it stays a conflict and survives the route going.
+    result = reconcile(client, _state("a.example.com"), IP, own)
+    assert result.conflicts == ["a.example.com"]
+    assert result.adopt == {}
+    reconcile(client, DesiredState(routes=[]), IP, own)
+    assert [c for c in respx.calls if c.request.method == "DELETE"] == []
+    assert own.unifi_records == {}
+
+
+@respx.mock
+def test_create_without_an_id_keeps_pending(client: UnifiClient, tmp_path: Path) -> None:
+    # A 2xx without an id may still have created the record, so the intent is kept.
+    respx.get(BASE).mock(return_value=_page())
+    respx.post(BASE).mock(return_value=httpx.Response(201, json={}))
+    with pytest.raises(StageError) as err:
+        reconcile(client, _state("a.example.com"), IP, _own(tmp_path))
+    assert err.value.retriable
+    assert Ownership.load(tmp_path).pending == {"a.example.com"}
+
+
+@respx.mock
+def test_create_is_not_retried_after_a_5xx(client: UnifiClient, tmp_path: Path) -> None:
+    # The server may have created the record before failing; a retry could make a duplicate.
+    respx.get(BASE).mock(return_value=_page())
+    post = respx.post(BASE).mock(return_value=httpx.Response(502))
+    with pytest.raises(StageError) as err:
+        reconcile(client, _state("a.example.com"), IP, _own(tmp_path))
+    assert post.call_count == 1
+    assert err.value.retriable
+    assert Ownership.load(tmp_path).pending == {"a.example.com"}
+
+
+@respx.mock
+def test_create_is_retried_after_a_429(client: UnifiClient, tmp_path: Path) -> None:
+    respx.get(BASE).mock(return_value=_page())
+    post = respx.post(BASE).mock(
+        side_effect=[httpx.Response(429), httpx.Response(201, json={"id": "p1"})]
+    )
+    own = _own(tmp_path)
+    reconcile(client, _state("a.example.com"), IP, own)
+    assert post.call_count == 2
+    assert own.unifi_records == {"a.example.com": "p1"}

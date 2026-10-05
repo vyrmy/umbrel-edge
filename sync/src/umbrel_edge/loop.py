@@ -16,6 +16,8 @@ from umbrel_edge.ownership import Ownership
 
 log = logging.getLogger(__name__)
 
+TRAEFIK_STAGE = "traefik"
+
 
 @dataclass
 class PassResult:
@@ -45,24 +47,32 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
         print(f"/__edge/launcher.js would serve:\n{launcher_js}")
         try:
             _unifi(state, config, settings, dry_run=True)
-        except StageError as exc:
-            log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
-            errors.append(exc)
+        except Exception as exc:
+            errors.append(_failed(unifi.STAGE, exc))
         errors += _cloudflare(state, config, dry_run=True)
         return PassResult(state=state, errors=errors, launcher_js=launcher_js)
 
     try:
         _traefik(state, config.domain, settings)
-    except StageError as exc:
-        log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
-        errors.append(exc)
+    except Exception as exc:
+        errors.append(_failed(TRAEFIK_STAGE, exc))
     try:
         _unifi(state, config, settings, dry_run=False)
-    except StageError as exc:
-        log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
-        errors.append(exc)
+    except Exception as exc:
+        errors.append(_failed(unifi.STAGE, exc))
     errors += _cloudflare(state, config, dry_run=False)
     return PassResult(state=state, errors=errors, launcher_js=launcher_js)
+
+
+def _failed(stage: str, exc: Exception) -> StageError:
+    """Log a stage failure and return it as a StageError. Anything else a stage raises is a bug,
+    so it is logged with its traceback and recorded against that stage, and later stages still
+    run."""
+    if isinstance(exc, StageError):
+        log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
+        return exc
+    log.error("stage failed unexpectedly", exc_info=exc, extra={"stage": stage})
+    return StageError(stage, repr(exc))
 
 
 def _traefik(state: DesiredState, domain: str, settings: Settings) -> None:
@@ -99,9 +109,8 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
         return []
     errors: list[StageError] = []
 
-    def fail(exc: StageError) -> None:
-        log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
-        errors.append(exc)
+    def fail(stage: str, exc: Exception) -> None:
+        errors.append(_failed(stage, exc))
 
     client = cloudflare.CloudflareClient(creds)
     try:
@@ -109,8 +118,8 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
         # no Access app, no DNS. One read up front covers all three stages.
         try:
             clashes = cloudflare.unmanaged_clashes(state, client.list_dns_records())
-        except StageError as exc:
-            fail(exc)
+        except Exception as exc:
+            fail(cloudflare.DNS_STAGE, exc)
             return errors
         for hostname in sorted(clashes):
             log.warning(
@@ -123,8 +132,8 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
             plan = cloudflare.reconcile_tunnel(client, state, dry_run=dry_run)
             if dry_run:
                 print(plan.describe())
-        except StageError as exc:
-            fail(exc)
+        except Exception as exc:
+            fail(cloudflare.TUNNEL_STAGE, exc)
             tunnel_ok = False
 
         # Until the Access plan is known and applied, no access-true name may be published.
@@ -140,10 +149,11 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
             else:
                 cloudflare.apply_access_changes(client, access_plan)
             withheld = frozenset()
-        except StageError as exc:
-            fail(exc)
+        except Exception as exc:
+            fail(cloudflare.ACCESS_STAGE, exc)
             if access_plan is not None:
-                # Apps that already existed are still protected; only new ones must wait.
+                # Apps that already existed, or were created before the failure, protect their
+                # names; only those still without an app must wait.
                 withheld = unprotected = access_plan.missing
 
         try:
@@ -157,14 +167,14 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
             )
             if dry_run:
                 print(dns_plan.describe())
-        except StageError as exc:
-            fail(exc)
+        except Exception as exc:
+            fail(cloudflare.DNS_STAGE, exc)
 
         if access_plan is not None and not dry_run:
             try:
                 cloudflare.apply_access_deletions(client, access_plan)
-            except StageError as exc:
-                fail(exc)
+            except Exception as exc:
+                fail(cloudflare.ACCESS_STAGE, exc)
     finally:
         client.close()
     return errors
@@ -172,12 +182,18 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
 
 def run_forever(settings: Settings, health: HealthState) -> None:
     while True:
-        result = run_pass(settings)
-        health.record(
-            routes=len(result.state.routes) if result.state else 0,
-            errors=[{"stage": e.stage, "message": e.message} for e in result.errors],
-            launcher_js=result.launcher_js,
-        )
+        try:
+            result = run_pass(settings)
+        except Exception as exc:
+            # Only a bug gets here. Report it and try again next interval rather than exit.
+            log.error("pass failed unexpectedly", exc_info=exc)
+            health.record(routes=0, errors=[{"stage": "loop", "message": repr(exc)}])
+        else:
+            health.record(
+                routes=len(result.state.routes) if result.state else 0,
+                errors=[{"stage": e.stage, "message": e.message} for e in result.errors],
+                launcher_js=result.launcher_js,
+            )
         _wait(settings)
 
 

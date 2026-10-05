@@ -45,17 +45,26 @@ class Plan:
     delete: dict[str, str] = field(default_factory=dict)  # hostname -> id
     conflicts: list[str] = field(default_factory=list)
     forget: list[str] = field(default_factory=list)  # owned hostnames already gone upstream
-    adopt: dict[str, str] = field(default_factory=dict)  # hostname -> id of our own lost record
+    # hostname -> id of a record our own unfinished create made (see ownership.pending)
+    adopt: dict[str, str] = field(default_factory=dict)
+    clear_pending: list[str] = field(default_factory=list)  # no record to recover, or not ours
 
     @property
     def empty(self) -> bool:
-        return not (self.create or self.update or self.delete or self.forget or self.adopt)
+        return not (
+            self.create
+            or self.update
+            or self.delete
+            or self.forget
+            or self.adopt
+            or self.clear_pending
+        )
 
     def describe(self) -> str:
         lines = [f"+ {h} -> {ip}" for h, ip in sorted(self.create.items())]
         lines += [f"~ {h} -> {ip}" for h, (_, ip) in sorted(self.update.items())]
         lines += [f"- {h}" for h in sorted(self.delete)]
-        lines += [f"= {h} matches our record, adopted" for h in sorted(self.adopt)]
+        lines += [f"= {h} created by an unfinished pass; adopted" for h in sorted(self.adopt)]
         lines += [f"! {h} exists and is not owned; skipped" for h in sorted(self.conflicts)]
         return "\n".join(lines) or "unifi: no changes"
 
@@ -98,7 +107,7 @@ class UnifiClient:
         created = self._request("POST", "/dns/policies", json=_body(hostname, ip))
         policy_id = created.get("id")
         if not isinstance(policy_id, str):
-            raise StageError(STAGE, f"create {hostname}: response carried no id")
+            raise StageError(STAGE, f"create {hostname}: response carried no id", retriable=True)
         return policy_id
 
     def update(self, policy_id: str, hostname: str, ip: str) -> None:
@@ -129,7 +138,12 @@ def wanted(state: DesiredState, proxy_ip: str) -> dict[str, str]:
     return {r.hostname: proxy_ip for r in state.routes if r.internal}
 
 
-def plan(want: dict[str, str], existing: list[dict[str, Any]], ownership: Ownership) -> Plan:
+def plan(
+    want: dict[str, str], existing: list[dict[str, Any]], ownership: Ownership, proxy_ip: str
+) -> Plan:
+    """A record sync did not create is never modified, deleted or adopted. The one exception is
+    a hostname in `ownership.pending`: sync sent a create for it and never stored the id, so a
+    record there with the proxy address is that create, and is taken back."""
     owned = ownership.unifi_records
     owned_ids = set(owned.values())
     by_domain: dict[str, dict[str, Any]] = {}
@@ -140,20 +154,31 @@ def plan(want: dict[str, str], existing: list[dict[str, Any]], ownership: Owners
             by_domain[domain] = policy
     by_id = {p.get("id"): p for p in existing}
     result = Plan()
+    for hostname in sorted(ownership.pending):
+        match = by_domain.get(hostname.lower())
+        if hostname in owned:
+            result.clear_pending.append(hostname)
+        elif match is None:
+            # Nothing was created. A wanted name is simply created again below.
+            if hostname not in want:
+                result.clear_pending.append(hostname)
+        elif match.get("ipv4Address") == proxy_ip and match.get("id"):
+            result.adopt[hostname] = str(match["id"])
+        else:
+            # Someone else's record took the name: it stays a conflict, never ours.
+            result.clear_pending.append(hostname)
     for hostname, ip in want.items():
         match = by_domain.get(hostname.lower())
         if match is None:
             result.create[hostname] = ip
+        elif hostname in result.adopt:
+            if match.get("ipv4Address") != ip or not match.get("enabled", True):
+                result.update[hostname] = (result.adopt[hostname], ip)
         elif match.get("id") != owned.get(hostname):
-            if match.get("ipv4Address") == ip and match.get("id"):
-                # Exactly what we would have created: a crash or timeout lost the id before it
-                # reached ownership.json, so take it back rather than orphan it.
-                result.adopt[hostname] = str(match["id"])
-            else:
-                result.conflicts.append(hostname)
+            result.conflicts.append(hostname)
         elif match.get("ipv4Address") != ip or not match.get("enabled", True):
             result.update[hostname] = (str(match["id"]), ip)
-    for hostname, policy_id in owned.items():
+    for hostname, policy_id in [*owned.items(), *result.adopt.items()]:
         if hostname in want:
             continue
         if policy_id in by_id:
@@ -171,17 +196,34 @@ def reconcile(
     *,
     dry_run: bool = False,
 ) -> Plan:
-    result = plan(wanted(state, proxy_ip), client.list_a_records(), ownership)
+    result = plan(wanted(state, proxy_ip), client.list_a_records(), ownership, proxy_ip)
     for hostname in result.conflicts:
         log.warning("unifi conflict: unowned record, skipped", extra={"hostname": hostname})
     if dry_run:
         return result
     for hostname, policy_id in result.adopt.items():
         ownership.unifi_records[hostname] = policy_id
+        ownership.pending.discard(hostname)
         ownership.save()
-        log.info("unifi record adopted", extra={"hostname": hostname})
+        log.info("unifi record from an unfinished create adopted", extra={"hostname": hostname})
+    if result.clear_pending:
+        ownership.pending.difference_update(result.clear_pending)
+        ownership.save()
     for hostname, ip in result.create.items():
-        ownership.unifi_records[hostname] = client.create(hostname, ip)
+        # Record the intent first: if the response or the next save is lost, the next pass
+        # knows a record under this name with the proxy address is ours.
+        ownership.pending.add(hostname)
+        ownership.save()
+        try:
+            ownership.unifi_records[hostname] = client.create(hostname, ip)
+        except StageError as exc:
+            if not exc.retriable:
+                # A definite refusal (4xx): nothing was created, so there is nothing to
+                # recover, and a record made later under this name must not look like ours.
+                ownership.pending.discard(hostname)
+                ownership.save()
+            raise
+        ownership.pending.discard(hostname)
         ownership.save()
         log.info("unifi record created", extra={"hostname": hostname})
     for hostname, (policy_id, ip) in result.update.items():
