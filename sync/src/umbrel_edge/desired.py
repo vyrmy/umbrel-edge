@@ -62,7 +62,10 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
     else:
         external = d.external and manifest.id not in config.external_deny
     access = (d.access if policy.access is None else policy.access) and external
-    forward_auth = d.forward_auth if policy.forward_auth is None else policy.forward_auth
+    if policy.forward_auth is not None:
+        forward_auth = policy.forward_auth
+    else:
+        forward_auth = d.forward_auth and manifest.id not in config.forward_auth_deny
     port = policy.upstream_port or manifest.port
     return Route(
         app_id=manifest.id,

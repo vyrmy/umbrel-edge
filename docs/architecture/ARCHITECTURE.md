@@ -204,6 +204,7 @@ class EdgeConfig(BaseModel):
         "denny-olivetin", "torbrowser", "denny-librewolf", "wireguard",
         "tailscale", "vyrmy-edge",
     ]
+    forward_auth_deny: list[str] = ["authentik"]   # never behind forward auth by default
     exclude: list[str] = ["mosquitto"]   # apps to ignore entirely (no web UI)
     access: AccessSettings
     forward_auth: ForwardAuthSettings | None = None
@@ -236,7 +237,7 @@ Rules applied in `desired.py`:
 - `external` is forced false for ids in `external_deny` unless `apps.<id>.external` is set explicitly.
 - `access` only matters when `external` is true.
 - Hostname collisions are a validation error, not a silent overwrite.
-- `forward_auth` defaults to `defaults.forward_auth` (false). If any app, or the default, turns it on and there is no top-level `forward_auth` block, the config is rejected with a message naming those apps. `build` checks again, so a protected route is never published without its login.
+- `forward_auth` defaults to `defaults.forward_auth` (false), and is forced false for ids in `forward_auth_deny` unless `apps.<id>.forward_auth` is set explicitly. The built-in list holds `authentik`: Authentik serves the login flow, so protecting its own hostname denies or loops every login and locks out every protected app. If any app, or the default, turns it on and there is no top-level `forward_auth` block, the config is rejected with a message naming those apps. `build` checks again, so a protected route is never published without its login.
 
 ## Contracts
 

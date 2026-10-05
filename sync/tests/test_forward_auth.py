@@ -13,6 +13,7 @@ from umbrel_edge.desired import build
 from umbrel_edge.discovery import discover
 from umbrel_edge.models import (
     DEFAULT_AUTH_RESPONSE_HEADERS,
+    AppManifest,
     AppPolicy,
     EdgeConfig,
     ForwardAuthSettings,
@@ -167,3 +168,32 @@ def test_every_protected_route_shares_one_middleware_and_service(app_data: Path)
     assert {r["service"] for r in outposts.values()} == {"authentik-outpost"}
     for name in ("app-jellyfin", "app-home-assistant"):
         assert doc["routers"][name]["middlewares"] == ["authentik"]
+
+
+def test_default_on_leaves_authentik_itself_unprotected(app_data: Path) -> None:
+    # Authentik's login flow must be reachable, or every protected app is locked out.
+    config = _config()
+    config.defaults.forward_auth = True
+    authentik = AppManifest(id="authentik", name="authentik", port=9000)
+    state = build([*discover(app_data), authentik], config)
+    flags = {r.app_id: r.forward_auth for r in state.routes}
+    assert flags == {"authentik": False, "umbrel": True, "home-assistant": True, "jellyfin": True}
+    doc = yaml.safe_load(traefik_writer.render(state, config.domain))["http"]
+    assert "middlewares" not in doc["routers"]["app-authentik"]
+    assert "outpost-authentik" not in doc["routers"]
+
+
+def test_forward_auth_deny_is_overridden_only_explicitly() -> None:
+    config = _config(authentik=AppPolicy(forward_auth=True))
+    config.defaults.forward_auth = True
+    config.forward_auth_deny.append("radarr")
+    manifests = [
+        AppManifest(id="authentik", name="authentik", port=9000),
+        AppManifest(id="radarr", name="Radarr", port=7878),
+    ]
+    flags = {r.app_id: r.forward_auth for r in build(manifests, config).routes}
+    assert flags == {"authentik": True, "radarr": False}
+
+
+def test_forward_auth_deny_defaults_to_authentik() -> None:
+    assert _config().forward_auth_deny == ["authentik"]

@@ -25,6 +25,11 @@ external_deny:
   - tailscale
   - vyrmy-edge
 
+# Never behind forward auth unless apps.<id>.forward_auth is set explicitly.
+# Authentik serves the login, so protecting it would lock everyone out.
+forward_auth_deny:
+  - authentik
+
 # Ignored entirely: no route, no records.
 exclude:
   - mosquitto
