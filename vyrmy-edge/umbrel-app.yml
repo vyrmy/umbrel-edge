@@ -4,7 +4,7 @@ name: Edge
 tagline: HTTPS hostnames for every app, at home and away
 icon: https://raw.githubusercontent.com/traefik/traefik/master/docs/content/assets/img/traefik.logo.png
 category: networking
-version: "0.2.0"
+version: "0.2.1"
 port: 18080
 description: >-
   Gives every app on this Umbrel its own hostname under bebitwise.dev, with a
@@ -27,13 +27,11 @@ repo: https://github.com/vyrmy/umbrel-edge
 support: https://github.com/vyrmy/umbrel-edge/issues
 gallery: []
 releaseNotes: >-
-  Fixes the first release: sync can now write its routes, and the proxy
-  answers on 192.168.10.4 with its reserved MAC and replies from that
-  address. Traefik's settings now arrive with app updates. Adds UniFi DNS
-  records, the Cloudflare Tunnel connector with public DNS and Cloudflare
-  Access, and the dashboard launcher that opens apps at their own
-  hostnames. The UniFi and Cloudflare parts stay idle until their keys are
-  in secrets.env.
+  Lets the Umbrel itself, and every app on it, reach the proxy on
+  192.168.10.4 through a small helper interface on 192.168.10.5. Apps can
+  now call other apps by their bebitwise.dev hostnames, which sign-in
+  through Authentik needs. Turn off external DNS in the Umbrel's network
+  settings so those names resolve to the proxy.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""
