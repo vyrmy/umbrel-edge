@@ -12,7 +12,7 @@ Clicking an app on the Umbrel dashboard at `https://umbrel.DOMAIN` opens `https:
 - `sync/src/umbrel_edge/launcher.py` (new)
 - `sync/src/umbrel_edge/health.py` (existing): serve `GET /__edge/launcher.js` next to `/healthz`
 - `sync/src/umbrel_edge/traefik_writer.py` (existing): the `umbrel` route gets the body-rewrite middleware and a `PathPrefix(/__edge/)` router to `sync:9000`
-- `vyrmy-edge/traefik/traefik.yml` (existing): enable the body-rewrite plugin, pinned by version
+- `vyrmy-edge/docker-compose.yml` (existing): enable the body-rewrite plugin in Traefik's command flags, pinned by version
 - `sync/tests/test_launcher.py` (new)
 
 ## Contract
@@ -48,9 +48,9 @@ Recorded on 5 October 2026 with read-only GETs against `http://192.168.10.2/` (T
 
 ## Implementation notes
 
-- Plugin: `github.com/packruler/rewrite-body` v1.2.0, pinned in `vyrmy-edge/traefik/traefik.yml` under `experimental.plugins`. It is a fork of Traefik's own rewrite-body plugin with gzip support. The last release is from November 2022, but the last commit to the repo is from May 2024 and it is the only maintained body-rewrite plugin for Traefik that I found. Traefik downloads it from GitHub at start, so the Traefik container needs internet access then, and fails to start if the download fails. Traefik v3.7.13 is already pinned in the compose file.
+- Plugin: `github.com/packruler/rewrite-body` v1.2.0, pinned in the traefik service's `--experimental.plugins` flags in `vyrmy-edge/docker-compose.yml`. It is a fork of Traefik's own rewrite-body plugin with gzip support. The last release is from November 2022, but the last commit to the repo is from May 2024 and it is the only maintained body-rewrite plugin for Traefik that I found. Traefik downloads it from GitHub at start, so the Traefik container needs internet access then. If the download or load fails, Traefik logs "Plugins are disabled" and starts anyway (`--experimental.abortonpluginfailure=false`). Only the umbrel router is dropped, and sync's priority-1 fallback router `edge-umbrel-fallback` serves the dashboard without the launcher. Traefik v3.7.13 is already pinned in the compose file.
 - The rewrite is a single regex, `</head>` to the script tag plus `</head>`, on `text/html` GET responses of the umbrel route only. `lastModified: true` keeps the upstream header.
 - `sync` serves `/__edge/launcher.js` from its health server (`:9000`) with `Cache-Control: no-cache`. The script is regenerated every pass and swapped in memory, so it is also current for `--dry-run` output. Traefik reaches it at `http://vyrmy-edge_sync_1:9000`.
 - Only the ports of the manifests are mapped, which is what the dashboard uses. A custom `upstream_port` in `edge.yaml` does not change the map.
-- Docker compose is unchanged. The traefik service needs a restart once to load the plugin, and `traefik.yml` is a bind mount, so the owner must update the app.
+- Traefik's static config, plugin included, moved from `traefik/traefik.yml` into compose command flags, because an app update does not copy the `traefik/` folder. Updating the app delivers it.
 - The golden file is `sync/tests/fixtures/golden/umbrel-route.yml`. Regenerate it by hand if the middleware changes on purpose.

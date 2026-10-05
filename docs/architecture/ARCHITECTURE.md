@@ -119,8 +119,8 @@ umbrel-edge/                         # GitHub repo, added to Umbrel as a communi
 ├── umbrel-app-store.yml             # store id "vyrmy", store name (public repo)
 ├── vyrmy-edge/                  # the Umbrel app (folder = <store id>-<app id>)
 │   ├── umbrel-app.yml               # manifest: id, name, port (Traefik dashboard, LAN only)
-│   ├── docker-compose.yml           # traefik, cloudflared, sync; macvlan + bridge networks
-│   ├── traefik/traefik.yml          # static config: entrypoints, ACME DNS-01, file provider
+│   ├── docker-compose.yml           # init, traefik, cloudflared, sync; macvlan + bridge networks;
+│   │                                #   Traefik static config as command flags
 │   └── edge.example.yaml            # annotated example of edge.yaml
 ├── sync/                            # Python package, built into the sync image
 │   ├── pyproject.toml
@@ -147,7 +147,7 @@ umbrel-edge/                         # GitHub repo, added to Umbrel as a communi
 No database. The persistent state is:
 
 - `edge.yaml` (input, owned by you).
-- `ownership.json` (UniFi record ids, owned by `sync`).
+- `ownership.json` (UniFi record ids, owned by `sync`). A hostname goes into `pending` just before its create request and leaves once the id is stored. A pending name whose record has the proxy IP is the only kind of unowned record `sync` ever adopts, so a lost response or a crash cannot orphan a record, and a hand-made record never becomes `sync`'s. A definite 4xx refusal clears the mark. Version 1 files still load.
 - Traefik's `acme.json`.
 - The remote resources in UniFi and Cloudflare.
 
@@ -214,7 +214,7 @@ class DesiredState(BaseModel):
 `ownership.json`:
 
 ```json
-{ "version": 1, "unifi_records": { "jellyfin.example.com": "<dns-policy-id>" } }
+{ "version": 2, "unifi_records": { "jellyfin.example.com": "<dns-policy-id>" }, "pending": [] }
 ```
 
 Rules applied in `desired.py`:
@@ -237,7 +237,7 @@ Rules applied in `desired.py`:
 **Health endpoint.** `GET /healthz` on `sync:9000`, bridge network only.
 
 - `200` `{"status": "ok", "last_success": "<ISO 8601>", "routes": <int>}` when the last pass succeeded within 5 minutes.
-- `503` `{"status": "degraded", "last_success": "<ISO 8601 | null>", "errors": [{"stage": "unifi|cloudflare_tunnel|cloudflare_dns|cloudflare_access|traefik", "message": "<str>"}]}` otherwise.
+- `503` `{"status": "degraded", "last_success": "<ISO 8601 | null>", "errors": [{"stage": "config|traefik|unifi|cloudflare_tunnel|cloudflare_dns|cloudflare_access|loop", "message": "<str>"}]}` otherwise.
 
 **Traefik dynamic file** (`/data/traefik/dynamic/apps.yml`, written by `sync`, read by Traefik's file provider). One router per route: rule ``Host(`<hostname>`)``, entrypoint `websecure`, TLS with certResolver `cloudflare` and domain `*.DOMAIN`. One service per route, with loadBalancer server `<upstream>` and passHostHeader true. Only routes with `internal` or `external` true are written.
 
@@ -249,7 +249,7 @@ Rules applied in `desired.py`:
 - DNS: `GET/POST/PATCH/DELETE /zones/{zone_id}/dns_records`. Each record is a CNAME `<h>` → `<tunnel_id>.cfargotunnel.com`, proxied, with comment `managed-by=umbrel-edge`. Records without that comment are never touched.
 - Access: apps via `GET/POST/PUT/DELETE /accounts/{account_id}/access/apps`, policies via the same verbs on `/accounts/{account_id}/access/policies`. There is one reusable allow policy, named `umbrel-edge:allowed-emails`, with one `include` rule per address in `access.allowed_emails`. Each app is named `umbrel-edge:<h>`, type `self_hosted`, domain `<h>`, session duration from config, and references that policy as `"policies": [{"id": "<policy id>", "precedence": 1}]`. Cloudflare now recommends reusable policies and does not allow app-scoped ones on new apps, so the policy is not inlined. Order within a pass: tunnel ingress, Access create and update, DNS, Access delete. A name is therefore never public without its Access app, and if the Access stage fails, new access-true names are not published.
 
-**Error shape inside `sync`.** Every client raises `StageError(stage: str, message: str, retriable: bool)`. `loop.py` catches it per stage and records it for `/healthz`. HTTP 429 and 5xx responses are retriable with exponential backoff (3 attempts). 4xx responses are not.
+**Error shape inside `sync`.** Every client raises `StageError(stage: str, message: str, retriable: bool)`. `loop.py` catches it per stage and records it for `/healthz`. HTTP 429 and 5xx responses are retriable with exponential backoff (3 attempts). 4xx responses are not. A POST is never repeated once it may have reached the server (a timeout after sending, or a 5xx), because a repeat could create the resource twice; the next pass re-plans instead.
 
 ## Risks and open questions
 

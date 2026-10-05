@@ -12,7 +12,7 @@ Traefik runs as an Umbrel app at `192.168.10.4`, holds a valid `*.DOMAIN` certif
 - `umbrel-app-store.yml` (new)
 - `vyrmy-edge/umbrel-app.yml` (new)
 - `vyrmy-edge/docker-compose.yml` (new): the `traefik` service only for now
-- `vyrmy-edge/traefik/traefik.yml` (new)
+- `vyrmy-edge/traefik/traefik.yml` (new; later replaced by command flags in `docker-compose.yml`, see Risks in ARCHITECTURE.md)
 - `vyrmy-edge/edge.example.yaml` (new)
 
 ## Contract
