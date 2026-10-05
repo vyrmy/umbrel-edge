@@ -16,9 +16,9 @@ Every installed app works at its new hostname, both inside and outside. The old 
 ## Steps
 1. For each app, load it internally and externally. Note any Umbrel app-auth redirect failure (umbrel#2242), WebSocket failure or broken asset path.
 2. Where Umbrel app auth breaks on the custom hostname, decide per app. Either turn it off with `umbreld client apps.setSettings.mutate --appId <id> --appProxyAuthEnabled false`, if Access covers the external path, or keep the app internal only.
-3. For Home Assistant, add `http: use_x_forwarded_for: true` and `trusted_proxies` covering the `edge` bridge subnet. Restart it and check that `https://home-assistant.DOMAIN` (or your chosen subdomain) works on the LAN, including the companion app.
+3. For Home Assistant, add `http: use_x_forwarded_for: true` and `trusted_proxies: [10.21.0.5]` (Traefik's address on `umbrel_main_network`, which is where its requests to `host.docker.internal:8123` come from). Restart it and check that `https://home-assistant.DOMAIN` (or your chosen subdomain) works on the LAN, including the companion app.
 4. Set the companion app's server URL to `https://home-assistant.DOMAIN`. On the phone, set the UniFi WireGuard profile to connect on demand whenever the phone is off the home Wi-Fi, with the UCG as its DNS server. Check from mobile data that the app connects and that a notification arrives.
-5. Set up Uptime Kuma monitors for `https://edge.DOMAIN/healthz` (internal route to `sync:9000`) and each app hostname.
+5. Set up Uptime Kuma monitors for `/healthz` and each app hostname. Uptime Kuma runs on the Umbrel, so it cannot reach `192.168.10.4`: point the monitors at `https://vyrmy-edge_traefik_1` (both apps are on `umbrel_main_network`) with the app's hostname as the `Host` header, or add an internal route to `sync:9000` and check it the same way. Confirm which of these Uptime Kuma supports before building on it.
 6. Stop the old Umbrel "Cloudflare Tunnel" app, and delete its public hostnames once nothing depends on them.
 
 ## Acceptance
