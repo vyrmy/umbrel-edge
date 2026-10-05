@@ -1,0 +1,13 @@
+# umbreld's store, ${UMBREL_ROOT}/umbrel.yaml. Only `apps` matters to discovery.
+# lobe-chat has a folder in app-data but is not listed: a leftover.
+version: 2.0.0
+apps:
+  - home-assistant
+  - jellyfin
+  - mosquitto
+  - broken
+  - no-port
+  - nextcloud
+appRepositories:
+  - https://github.com/vyrmy/umbrel-edge.git
+widgets: []

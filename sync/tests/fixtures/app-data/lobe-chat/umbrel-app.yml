@@ -1,0 +1,5 @@
+manifestVersion: 1
+id: lobe-chat
+name: LobeChat
+port: 3210
+category: ai

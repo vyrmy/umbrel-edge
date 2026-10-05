@@ -109,8 +109,10 @@ services:
       EDGE_STATE_DIR: /data/state
     volumes:
       - ${APP_DATA_DIR}/data:/data
-      # Every app's data folder, read-only, for umbrel-app.yml discovery.
-      - ${APP_DATA_DIR}/..:/umbrel/app-data:ro
+      # The Umbrel data directory, read-only, for discovery: app-data/<id>/umbrel-app.yml, and
+      # umbrel.yaml, where umbreld lists the installed apps under `apps`. The directory, because
+      # umbreld replaces umbrel.yaml by rename and a mount of the file alone would go stale.
+      - ${APP_DATA_DIR}/../..:/umbrel:ro
     networks:
       edge: {}
 

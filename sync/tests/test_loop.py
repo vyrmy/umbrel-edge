@@ -57,6 +57,16 @@ def test_pass_writes_routes(tmp_path: Path, app_data: Path) -> None:
     assert "umbrel.bebitwise.dev" in (tmp_path / "dynamic" / "apps.yml").read_text()
 
 
+def test_pass_routes_only_apps_umbreld_lists_as_installed(tmp_path: Path, app_data: Path) -> None:
+    (tmp_path / "edge.yaml").write_text(CONFIG)
+    result = run_pass(_settings(tmp_path, app_data))
+    assert result.state is not None
+    hostnames = [r.hostname for r in result.state.routes]
+    assert "jellyfin.bebitwise.dev" in hostnames
+    assert "lobe-chat.bebitwise.dev" not in hostnames
+    assert "lobe-chat" not in (tmp_path / "dynamic" / "apps.yml").read_text()
+
+
 def _page(*items: dict[str, Any]) -> httpx.Response:
     return httpx.Response(
         200, json={"success": True, "result": list(items), "result_info": {"total_pages": 1}}
