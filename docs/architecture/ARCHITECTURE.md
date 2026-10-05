@@ -9,7 +9,7 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 ## Non-goals
 
 - Exposing anything that is not an Umbrel app. UniFi, Protect, the PicoKVM and the Sonoff dongle stay LAN or VPN only.
-- Replacing Umbrel's own login. Apps keep Umbrel app auth where it works (see Risks).
+- Replacing Umbrel's own login across the board. Apps keep Umbrel app auth where it works (see Risks); Authentik forward auth (decision 14) replaces it only on the apps you mark.
 - Wildcard DNS or wildcard tunnel ingress. Every hostname is created explicitly, so nothing is reachable by accident.
 - Hostnames more than one level deep (`app.home.DOMAIN`). Cloudflare's free Universal SSL only covers `*.DOMAIN`.
 - IPv6. None of the networks have IPv6 today.
@@ -32,6 +32,7 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 11. **App discovery reads `${UMBREL_ROOT}/app-data/*/umbrel-app.yml` read-only, for the apps umbreld lists as installed.** Each manifest carries `id`, `name` and `port`, the app_proxy port on the host. umbreld keeps the installed app ids under `apps` in `${UMBREL_ROOT}/umbrel.yaml` (`StoreSchema.apps` and the `FileStore` in `packages/umbreld/source/index.ts`, umbrelOS 2.0.0). It adds an id once an install has finished and removes it on uninstall. A folder in app-data whose id is not in that list belongs to no installed app, so it gets no route and an info log line the first time it is skipped. A leftover `lobe-chat` folder once produced a route and a UniFi record for a port nothing listened on; dropping it from the desired state makes `sync` delete the records it owns on the next pass. An app being installed gets its route once umbreld lists it. If `umbrel.yaml` is missing, unreadable or has no list under `apps`, discovery logs a warning on each pass and counts every folder as installed, so a bad read never withdraws every route. The compose file mounts the whole of `${UMBREL_ROOT}` read-only at `/umbrel` (see Risks). Rejected: umbreld's tRPC API, which needs a user JWT (and your account has 2FA). Also rejected: a bind mount of `umbrel.yaml` alone. umbreld writes the file to a temporary name and renames it over the old one on every store change, and a single-file bind mount keeps showing the copy from container start.
 12. **The app is shipped as a public Umbrel community app store in a GitHub repo (`vyrmy/umbrel-edge`), with images built by GitHub Actions to a public GHCR package and pinned by digest.** Community app stores are Umbrel's supported extension point and survive OS updates. Public means the Umbrel needs no GitHub token to pull the store or the image. Nothing secret is in the repo: tokens live only in `secrets.env` on the Umbrel, and the only home details it reveals are the `192.168.10.0/24` layout and the domain.
 13. **The Umbrel dashboard opens apps at their own hostnames through an injected launcher script.** The dashboard builds an app's link from whatever host you loaded it on plus the app's port, so from `umbrel.DOMAIN` it would open `umbrel.DOMAIN:8123`. Traefik's body-rewrite plugin adds one `<script src="/__edge/launcher.js">` tag to the dashboard's HTML on the `umbrel.DOMAIN` route only. `sync` generates `launcher.js` from the same port-to-hostname map it already builds, and serves it on that route. The script rewrites any link or `window.open` call aimed at `<current host>:<port>` to `https://<app>.DOMAIN<path>`. It works at home and through the tunnel. Rejected: Traefik listening on every app port and redirecting, which only works at home, because Cloudflare proxies a fixed short list of ports; it also needs a Traefik restart whenever an app is installed. Rejected: patching the dashboard's code, which is lost on every umbrelOS update.
+14. **Apps with no login of their own can sit behind Authentik forward auth, per app.** `apps.<id>.forward_auth: true` adds Traefik's `forwardAuth` middleware, pointed at Authentik's embedded outpost, to that app's router, so the same login applies at home and through the tunnel. Each protected hostname also gets a router for `/outpost.goauthentik.io/` to the outpost, above the app router, which is how Authentik's [Traefik integration](https://docs.goauthentik.io/add-secure-apps/providers/proxy/server_traefik/) finishes the login in single application mode; in domain level mode the same router is harmless. Off by default, because Umbrel app auth has to be turned off for every app that uses it ([umbrel#2242](https://github.com/getumbrel/umbrel/issues/2242)). Rejected: forward auth on the internal path only, which treats home and away differently for no gain.
 
 ## Stack
 
@@ -175,11 +176,19 @@ class AppPolicy(BaseModel):
     access: bool | None = None
     upstream_port: int | None = Field(default=None, ge=1, le=65535)
     upstream_scheme: Literal["http", "https"] = "http"
+    forward_auth: bool | None = None
 
 class Defaults(BaseModel):
     internal: bool = True
     external: bool = True
     access: bool = True
+    forward_auth: bool = False
+
+class ForwardAuthSettings(BaseModel):
+    """Authentik's embedded outpost (decision 14)."""
+    address: str        # http://host.docker.internal:<port>/outpost.goauthentik.io/auth/traefik
+    outpost_url: str    # http://host.docker.internal:<port>
+    response_headers: list[str] = DEFAULT_AUTH_RESPONSE_HEADERS   # the X-authentik-* list
 
 class AccessSettings(BaseModel):
     allowed_emails: list[str] = Field(min_length=1)
@@ -197,6 +206,7 @@ class EdgeConfig(BaseModel):
     ]
     exclude: list[str] = ["mosquitto"]   # apps to ignore entirely (no web UI)
     access: AccessSettings
+    forward_auth: ForwardAuthSettings | None = None
     apps: dict[str, AppPolicy] = {}
 
 class Route(BaseModel):
@@ -207,9 +217,11 @@ class Route(BaseModel):
     internal: bool
     external: bool
     access: bool
+    forward_auth: bool = False
 
 class DesiredState(BaseModel):
     routes: list[Route]                  # sorted by hostname, unique hostnames
+    forward_auth: ForwardAuthSettings | None = None   # set when any route is protected
 ```
 
 `ownership.json`:
@@ -224,6 +236,7 @@ Rules applied in `desired.py`:
 - `external` is forced false for ids in `external_deny` unless `apps.<id>.external` is set explicitly.
 - `access` only matters when `external` is true.
 - Hostname collisions are a validation error, not a silent overwrite.
+- `forward_auth` defaults to `defaults.forward_auth` (false). If any app, or the default, turns it on and there is no top-level `forward_auth` block, the config is rejected with a message naming those apps. `build` checks again, so a protected route is never published without its login.
 
 ## Contracts
 
@@ -242,6 +255,21 @@ Rules applied in `desired.py`:
 
 **Traefik dynamic file** (`/data/traefik/dynamic/apps.yml`, written by `sync`, read by Traefik's file provider). One router per route: rule ``Host(`<hostname>`)``, entrypoint `websecure`, TLS with certResolver `cloudflare` and domain `*.DOMAIN`. One service per route, with loadBalancer server `<upstream>` and passHostHeader true. Only routes with `internal` or `external` true are written.
 
+Forward auth (decision 14), written only when at least one route has `forward_auth` true:
+
+- One middleware, `authentik`: `forwardAuth` with `address`, `trustForwardHeader: true` and `authResponseHeaders` from `forward_auth.response_headers`. Field names follow [Traefik's ForwardAuth reference](https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/forwardauth/).
+- Each protected route's router lists `authentik` first in `middlewares`.
+- Each protected hostname gets a router `outpost-<id>`: rule ``Host(`<hostname>`) && PathPrefix(`/outpost.goauthentik.io/`)``, priority 1000 (above any app router, whose priority is its rule length), no middleware, the same entrypoint and TLS as the app router, to one shared service `authentik-outpost` with loadBalancer server `forward_auth.outpost_url` and passHostHeader true.
+- When the `umbrel` dashboard route is protected, its middlewares are `authentik` then `launcher-inject`, so the body rewrite never sees a login redirect, and `edge-assets` and `edge-umbrel-fallback` get `authentik` too, so neither is a way round the login.
+
+What the owner sets up in Authentik for each protected app (checked against [Authentik's forward auth docs](https://docs.goauthentik.io/add-secure-apps/providers/proxy/forward_auth/) and [embedded outpost docs](https://docs.goauthentik.io/add-secure-apps/outposts/embedded/), 5 October 2026):
+
+- A Proxy provider in "Forward auth (single application)" mode with External host `https://<app>.DOMAIN`, or one provider in "Forward auth (domain level)" mode with cookie domain `DOMAIN` for all of them (one login for every app, but no per-app policies).
+- An application using that provider, with the policy bindings you want.
+- The provider assigned to the embedded outpost (Applications, Outposts), and the outpost's `authentik_host` set to Authentik's full URL.
+- Umbrel app auth turned off for the protected app (`umbreld client apps.setSettings.mutate --appId <id> --appProxyAuthEnabled false`), otherwise umbrelOS sends the visitor to its own login on port 2000 after Authentik's ([umbrel#2242](https://github.com/getumbrel/umbrel/issues/2242)).
+- The embedded outpost answers on Authentik's own ports (9000 HTTP, 9443 HTTPS). Through `host.docker.internal:<port>`, `address` and `outpost_url` reach Authentik's app_proxy port instead, so Umbrel app auth has to be off for Authentik itself as well; it has its own login. Check on the first protected app that the app_proxy passes the `X-Forwarded-*` headers through unchanged, since the outpost uses them to know which host it is protecting.
+
 **UniFi Integration API** (base `https://<UNIFI_HOST>/proxy/network/integration/v1`, header `X-API-KEY`). Create, list and delete DNS policies under `sites/{siteId}/dns/policies`, type A, domain `<hostname>`, IPv4 `proxy_ip`. Confirm exact field names against [developer.ui.com](https://developer.ui.com/network/v10.1.84/creatednspolicy) in task 003. `sync` deletes only ids present in `ownership.json`.
 
 **Cloudflare API** (base `https://api.cloudflare.com/client/v4`, bearer `CF_API_TOKEN`):
@@ -254,7 +282,8 @@ Rules applied in `desired.py`:
 
 ## Risks and open questions
 
-- **Umbrel app auth on custom hostnames.** With app_proxy auth on, umbrelOS 2.0 redirects to its own login on port 2000 with its own certificate ([umbrel#2242](https://github.com/getumbrel/umbrel/issues/2242)). That is the one known source of certificate errors: every hostname Traefik and Cloudflare serve is covered by `*.DOMAIN`, but port 2000 is not. Task 006 tests this app by app. The fix is to turn app auth off for that app with `umbreld client apps.setSettings.mutate --appId <id> --appProxyAuthEnabled false`. Externally, Access then covers the app. Internally, anyone on Main could open it without a login until the identity-provider work adds Traefik forward-auth on the internal path, so do it per app and list the ones affected. The per-app findings (own login, risk without Umbrel auth, SSO support) are in [app-auth-audit.md](app-auth-audit.md). About 30 apps have no real login of their own and stay behind Umbrel auth until Authentik forward auth is in front of them. The built-in `external_deny` names Tor Browser as `tor-browser`, but its app id is `torbrowser`, so `edge.yaml` lists it explicitly.
+- **Umbrel app auth on custom hostnames.** With app_proxy auth on, umbrelOS 2.0 redirects to its own login on port 2000 with its own certificate ([umbrel#2242](https://github.com/getumbrel/umbrel/issues/2242)). That is the one known source of certificate errors: every hostname Traefik and Cloudflare serve is covered by `*.DOMAIN`, but port 2000 is not. Task 006 tests this app by app. The fix is to turn app auth off for that app with `umbreld client apps.setSettings.mutate --appId <id> --appProxyAuthEnabled false`. Externally, Access then covers the app. Internally, anyone on Main could open it without a login unless `apps.<id>.forward_auth` puts Authentik in front of it (decision 14), so do it per app and list the ones affected. The per-app findings (own login, risk without Umbrel auth, SSO support) are in [app-auth-audit.md](app-auth-audit.md). About 30 apps have no real login of their own and stay behind Umbrel auth until Authentik forward auth is in front of them. The built-in `external_deny` names Tor Browser as `tor-browser`, but its app id is `torbrowser`, so `edge.yaml` lists it explicitly.
+- **Forward auth protects only the hostname path.** With Umbrel app auth off, a protected app is still reachable with no login at `192.168.10.2:<port>` from any network the firewall lets reach the Umbrel (today that includes IoT, through the "IoT to Umbrel" rule). The protection is only complete once direct access to app ports on the Umbrel is blocked at the UniFi firewall, allowing only what is needed. Apps that publish a port or use host networking (see [app-auth-audit.md](app-auth-audit.md)) are open on those ports whatever Traefik does.
 - **The launcher script depends on the dashboard's link format.** If an umbrelOS update stops building links as `<host>:<port>`, apps open at the old address again until `launcher.js` is updated. The dashboard's Content-Security-Policy and response compression could also block or garble the injected tag. Task 007 checks both before relying on it.
 - **The app-data layout is assumed.** Task 002 confirms that each `app-data/<id>/umbrel-app.yml` exists and carries `port`. If it doesn't, discovery falls back to parsing `app_proxy` `PORT` from the app's `docker-compose.yml`.
 - **The installed-apps list is umbreld's internal store.** `apps` in `umbrel.yaml` is not a published interface. If a future umbrelOS moves or renames it, discovery warns on every pass and goes back to treating every app-data folder as installed, leftovers included, until discovery is updated.

@@ -9,6 +9,7 @@ defaults:
   internal: true    # UniFi A record <app>.bebitwise.dev -> proxy_ip
   external: true    # Cloudflare Tunnel hostname
   access: true      # Cloudflare Access in front of the tunnel hostname
+  forward_auth: false  # Authentik login in front of the hostname, at home and away
 
 # Never external unless apps.<id>.external is set explicitly.
 external_deny:
@@ -33,12 +34,23 @@ access:
     - you@example.com
   session_duration: 24h
 
+# Authentik forward auth (ARCHITECTURE.md, decision 14). Needed once any app sets
+# forward_auth: true. In Authentik, give each protected app a Proxy provider in
+# forward auth mode with its external host, and assign it to the embedded outpost.
+# Turn Umbrel app auth off for each protected app and for Authentik itself.
+# forward_auth:
+#   address: http://host.docker.internal:<authentik port>/outpost.goauthentik.io/auth/traefik
+#   outpost_url: http://host.docker.internal:<authentik port>
+#   # response_headers defaults to the X-authentik-* list from Authentik's Traefik docs.
+
 # Per-app overrides, keyed by Umbrel app id.
 apps: {}
 #  jellyfin:
 #    subdomain: tv
 #  some-app:
 #    external: false
+#  transmission:
+#    forward_auth: true   # no login of its own; also block its port on the Umbrel
 #  app-with-tls:
 #    upstream_scheme: https
 #    upstream_port: 8443

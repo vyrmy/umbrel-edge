@@ -41,7 +41,17 @@ def build(manifests: list[AppManifest], config: EdgeConfig) -> DesiredState:
             )
         owner[route.hostname] = manifest.id
         routes.append(route)
-    return DesiredState(routes=sorted(routes, key=lambda r: r.hostname))
+    protected = sorted(r.app_id for r in routes if r.forward_auth)
+    if protected and config.forward_auth is None:
+        # Fail closed: never publish a route without the login it asked for.
+        raise StageError(
+            "config",
+            f"forward_auth is on for {', '.join(protected)} but there is no forward_auth block",
+        )
+    return DesiredState(
+        routes=sorted(routes, key=lambda r: r.hostname),
+        forward_auth=config.forward_auth if protected else None,
+    )
 
 
 def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: EdgeConfig) -> Route:
@@ -52,6 +62,7 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
     else:
         external = d.external and manifest.id not in config.external_deny
     access = (d.access if policy.access is None else policy.access) and external
+    forward_auth = d.forward_auth if policy.forward_auth is None else policy.forward_auth
     port = policy.upstream_port or manifest.port
     return Route(
         app_id=manifest.id,
@@ -60,4 +71,5 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
         internal=internal,
         external=external,
         access=access,
+        forward_auth=forward_auth,
     )

@@ -4,9 +4,25 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress
+from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, model_validator
 
 SUBDOMAIN_RE = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+
+# The headers Authentik's Traefik docs pass through from the outpost to the app.
+DEFAULT_AUTH_RESPONSE_HEADERS = [
+    "X-authentik-username",
+    "X-authentik-groups",
+    "X-authentik-entitlements",
+    "X-authentik-email",
+    "X-authentik-name",
+    "X-authentik-uid",
+    "X-authentik-jwt",
+    "X-authentik-meta-jwks",
+    "X-authentik-meta-outpost",
+    "X-authentik-meta-provider",
+    "X-authentik-meta-app",
+    "X-authentik-meta-version",
+]
 
 
 class AppManifest(BaseModel):
@@ -31,6 +47,7 @@ class AppPolicy(BaseModel):
     access: bool | None = None
     upstream_port: int | None = Field(default=None, ge=1, le=65535)
     upstream_scheme: Literal["http", "https"] = "http"
+    forward_auth: bool | None = None
 
 
 class Defaults(BaseModel):
@@ -39,6 +56,17 @@ class Defaults(BaseModel):
     internal: bool = True
     external: bool = True
     access: bool = True
+    forward_auth: bool = False
+
+
+class ForwardAuthSettings(BaseModel):
+    """Authentik's embedded outpost, used by Traefik's forwardAuth middleware (decision 14)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    address: str
+    outpost_url: str
+    response_headers: list[str] = Field(default_factory=lambda: list(DEFAULT_AUTH_RESPONSE_HEADERS))
 
 
 class AccessSettings(BaseModel):
@@ -71,7 +99,22 @@ class EdgeConfig(BaseModel):
     ]
     exclude: list[str] = ["mosquitto"]
     access: AccessSettings
+    forward_auth: ForwardAuthSettings | None = None
     apps: dict[str, AppPolicy] = {}
+
+    @model_validator(mode="after")
+    def _forward_auth_needs_settings(self) -> EdgeConfig:
+        if self.forward_auth is not None:
+            return self
+        wanting = sorted(app_id for app_id, p in self.apps.items() if p.forward_auth)
+        if self.defaults.forward_auth:
+            wanting.insert(0, "defaults.forward_auth")
+        if wanting:
+            raise ValueError(
+                "forward_auth is on for " + ", ".join(wanting) + " but there is no top-level "
+                "forward_auth block"
+            )
+        return self
 
 
 class Route(BaseModel):
@@ -85,10 +128,13 @@ class Route(BaseModel):
     internal: bool
     external: bool
     access: bool
+    forward_auth: bool = False
 
 
 class DesiredState(BaseModel):
     routes: list[Route]
+    # Set only when at least one route is protected.
+    forward_auth: ForwardAuthSettings | None = None
 
     def port_map(self, manifests: dict[str, AppManifest]) -> dict[int, str]:
         """Host port to hostname, for the dashboard launcher (task 007)."""
