@@ -186,6 +186,22 @@ def _api_errors(body: dict[str, Any]) -> str:
     return "the API reported failure"
 
 
+def unmanaged_clashes(state: DesiredState, records: list[dict[str, Any]]) -> frozenset[str]:
+    """External hostnames whose public name already has a record we did not create. Such a name
+    belongs to someone else's site, so it gets no ingress entry and no Access app."""
+    taken = {str(r.get("name", "")).lower() for r in records if not _is_managed(r)}
+    return frozenset(r.hostname for r in external_routes(state) if r.hostname.lower() in taken)
+
+
+def without_clashes(state: DesiredState, clashes: frozenset[str]) -> DesiredState:
+    """A copy of the state in which clashing names are no longer external."""
+    routes = [
+        r.model_copy(update={"external": False}) if r.external and r.hostname in clashes else r
+        for r in state.routes
+    ]
+    return state.model_copy(update={"routes": routes})
+
+
 # --- Tunnel ingress -------------------------------------------------------------------------
 
 
@@ -312,17 +328,16 @@ def reconcile_dns(
     dry_run: bool = False,
     publish: bool = True,
     withheld: frozenset[str] = frozenset(),
+    unprotected: frozenset[str] = frozenset(),
 ) -> DnsPlan:
     """publish=False (the tunnel stage failed) suppresses creates and updates, so a public name
     never points at a tunnel that may not know it yet. `withheld` hostnames (an Access app that
     is missing or could not be created) are never created or updated either. Deletions still
-    run."""
+    run. `unprotected` hostnames are known to have no Access app, so their managed records are
+    deleted: a name must never stay public without its app when access is true."""
     routes = external_routes(state)
-    result = plan_dns(
-        sorted({r.hostname for r in routes}),
-        client.list_dns_records(),
-        client.creds.tunnel_target,
-    )
+    records = client.list_dns_records()
+    result = plan_dns(sorted({r.hostname for r in routes}), records, client.creds.tunnel_target)
     for hostname in result.conflicts:
         log.warning(
             "cloudflare dns conflict: unmanaged record, skipped", extra={"hostname": hostname}
@@ -335,6 +350,13 @@ def reconcile_dns(
         log.info("dns record held back: no Access app yet", extra={"hostname": hostname})
     for hostname in [h for h in result.update if h.lower() in held]:
         del result.update[hostname]
+    bare = {h.lower() for h in unprotected}
+    for record in records:
+        name = str(record.get("name", "")).lower()
+        if _is_managed(record) and name in bare:
+            result.update.pop(next((h for h in result.update if h.lower() == name), ""), None)
+            result.delete[f"{record['name']} (no Access app)"] = str(record["id"])
+            log.warning("dns record removed: no Access app", extra={"hostname": name})
     if dry_run:
         return result
     for hostname in result.create:
@@ -408,6 +430,7 @@ class AccessPlan:
     update: dict[str, str] = field(default_factory=dict)  # hostname -> app id
     delete: dict[str, str] = field(default_factory=dict)  # hostname -> app id
     conflicts: list[str] = field(default_factory=list)
+    extra_policies: list[str] = field(default_factory=list)  # duplicate managed policy ids
 
     @property
     def missing(self) -> frozenset[str]:
@@ -417,6 +440,7 @@ class AccessPlan:
     def describe(self) -> str:
         sign = {"create": "+", "update": "~", "delete": "-"}.get(self.policy_action)
         lines = [f"{sign} policy {POLICY_NAME}"] if sign else []
+        lines += [f"- policy {POLICY_NAME} (duplicate {i})" for i in sorted(self.extra_policies)]
         lines += [f"+ access {h}" for h in sorted(self.create)]
         lines += [f"~ access {h}" for h in sorted(self.update)]
         lines += [f"- access {h}" for h in sorted(self.delete)]
@@ -437,6 +461,7 @@ def plan_access(
     policy = managed_policies[0] if managed_policies else None
     if policy:
         plan.policy_id = str(policy["id"])
+        plan.extra_policies = [str(p["id"]) for p in managed_policies[1:]]
     if not want:
         plan.policy_action = "delete" if policy else ""
     elif policy is None:
@@ -527,6 +552,9 @@ def apply_access_deletions(client: CloudflareClient, plan: AccessPlan) -> None:
     for hostname, app_id in plan.delete.items():
         client.delete_access_app(app_id)
         log.info("access app deleted", extra={"hostname": hostname})
+    for policy_id in plan.extra_policies:
+        client.delete_access_policy(policy_id)
+        log.info("duplicate access policy deleted")
     if plan.policy_action == "delete" and plan.policy_id:
         client.delete_access_policy(plan.policy_id)
         log.info("access policy deleted")

@@ -45,15 +45,17 @@ class Plan:
     delete: dict[str, str] = field(default_factory=dict)  # hostname -> id
     conflicts: list[str] = field(default_factory=list)
     forget: list[str] = field(default_factory=list)  # owned hostnames already gone upstream
+    adopt: dict[str, str] = field(default_factory=dict)  # hostname -> id of our own lost record
 
     @property
     def empty(self) -> bool:
-        return not (self.create or self.update or self.delete or self.forget)
+        return not (self.create or self.update or self.delete or self.forget or self.adopt)
 
     def describe(self) -> str:
         lines = [f"+ {h} -> {ip}" for h, ip in sorted(self.create.items())]
         lines += [f"~ {h} -> {ip}" for h, (_, ip) in sorted(self.update.items())]
         lines += [f"- {h}" for h in sorted(self.delete)]
+        lines += [f"= {h} matches our record, adopted" for h in sorted(self.adopt)]
         lines += [f"! {h} exists and is not owned; skipped" for h in sorted(self.conflicts)]
         return "\n".join(lines) or "unifi: no changes"
 
@@ -143,7 +145,12 @@ def plan(want: dict[str, str], existing: list[dict[str, Any]], ownership: Owners
         if match is None:
             result.create[hostname] = ip
         elif match.get("id") != owned.get(hostname):
-            result.conflicts.append(hostname)
+            if match.get("ipv4Address") == ip and match.get("id"):
+                # Exactly what we would have created: a crash or timeout lost the id before it
+                # reached ownership.json, so take it back rather than orphan it.
+                result.adopt[hostname] = str(match["id"])
+            else:
+                result.conflicts.append(hostname)
         elif match.get("ipv4Address") != ip or not match.get("enabled", True):
             result.update[hostname] = (str(match["id"]), ip)
     for hostname, policy_id in owned.items():
@@ -169,6 +176,10 @@ def reconcile(
         log.warning("unifi conflict: unowned record, skipped", extra={"hostname": hostname})
     if dry_run:
         return result
+    for hostname, policy_id in result.adopt.items():
+        ownership.unifi_records[hostname] = policy_id
+        ownership.save()
+        log.info("unifi record adopted", extra={"hostname": hostname})
     for hostname, ip in result.create.items():
         ownership.unifi_records[hostname] = client.create(hostname, ip)
         ownership.save()

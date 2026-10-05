@@ -357,3 +357,110 @@ def test_access_false_deletes_only_that_apps_access_app(client: CloudflareClient
     apply_access_deletions(client, plan)
     assert delete_b.call_count == 1
     assert [c.request.method for c in respx.calls].count("DELETE") == 1
+
+
+@respx.mock
+def test_unmanaged_dns_record_gets_no_access_app_or_ingress(
+    tmp_path: Path, app_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env(monkeypatch)
+    (tmp_path / "edge.yaml").write_text(_CONFIG)
+    respx.get(TUNNEL).mock(
+        return_value=httpx.Response(200, json={"success": True, "result": {"config": {}}})
+    )
+    put = respx.put(TUNNEL).mock(return_value=OK)
+    # The existing public site already uses the jellyfin name, with no managed comment.
+    respx.get(DNS).mock(
+        return_value=_page({"id": "w1", "name": "jellyfin.bebitwise.dev", "type": "CNAME"})
+    )
+    respx.get(APPS).mock(return_value=_page())
+    respx.get(POLICIES).mock(return_value=_page(_policy()))
+    post_apps = respx.post(APPS).mock(return_value=OK)
+    post_dns = respx.post(DNS).mock(return_value=OK)
+
+    result = run_pass(_settings(tmp_path, app_data))
+
+    assert result.ok
+    assert not any("jellyfin" in c.request.content.decode() for c in post_apps.calls)
+    assert "jellyfin.bebitwise.dev" not in put.calls.last.request.content.decode()
+    assert not any("jellyfin" in c.request.content.decode() for c in post_dns.calls)
+
+
+@respx.mock
+def test_failed_access_create_removes_existing_dns_record(
+    tmp_path: Path, app_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env(monkeypatch)
+    (tmp_path / "edge.yaml").write_text(_CONFIG)
+    respx.get(TUNNEL).mock(
+        return_value=httpx.Response(200, json={"success": True, "result": {"config": {}}})
+    )
+    respx.put(TUNNEL).mock(return_value=OK)
+    respx.get(DNS).mock(
+        return_value=_page(
+            {
+                "id": "d9",
+                "name": "jellyfin.bebitwise.dev",
+                "type": "CNAME",
+                "content": "tun.cfargotunnel.com",
+                "proxied": True,
+                "comment": "managed-by=umbrel-edge",
+            }
+        )
+    )
+    respx.get(APPS).mock(return_value=_page())
+    respx.get(POLICIES).mock(return_value=_page(_policy()))
+    respx.post(APPS).mock(return_value=httpx.Response(403))
+    delete = respx.delete(f"{DNS}/d9").mock(return_value=OK)
+
+    result = run_pass(_settings(tmp_path, app_data))
+
+    assert [e.stage for e in result.errors] == ["cloudflare_access"]
+    assert delete.called
+
+
+@respx.mock
+def test_access_listing_failure_keeps_existing_dns_record(
+    tmp_path: Path, app_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _env(monkeypatch)
+    (tmp_path / "edge.yaml").write_text(_CONFIG)
+    respx.get(TUNNEL).mock(
+        return_value=httpx.Response(200, json={"success": True, "result": {"config": {}}})
+    )
+    respx.put(TUNNEL).mock(return_value=OK)
+    respx.get(DNS).mock(
+        return_value=_page(
+            {
+                "id": "d9",
+                "name": "jellyfin.bebitwise.dev",
+                "type": "CNAME",
+                "content": "tun.cfargotunnel.com",
+                "proxied": True,
+                "comment": "managed-by=umbrel-edge",
+            }
+        )
+    )
+    respx.get(APPS).mock(return_value=httpx.Response(403))
+    delete = respx.delete(f"{DNS}/d9").mock(return_value=OK)
+
+    run_pass(_settings(tmp_path, app_data))
+
+    assert not delete.called
+
+
+def test_duplicate_managed_policies_are_collapsed() -> None:
+    plan = plan_access(
+        ["a.example.com"], [_app("a.example.com")], [_policy(), _policy(pid="dup")], EMAILS, "24h"
+    )
+    assert plan.policy_id == "pol"
+    assert plan.extra_policies == ["dup"]
+
+
+@respx.mock
+def test_policy_post_is_not_retried_after_a_read_timeout(client: CloudflareClient) -> None:
+    post = respx.post(POLICIES).mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(StageError) as err:
+        client.create_access_policy({"name": POLICY_NAME})
+    assert post.call_count == 1
+    assert err.value.retriable

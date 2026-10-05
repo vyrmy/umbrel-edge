@@ -212,3 +212,27 @@ def test_unifi_failure_does_not_stop_traefik(
     result = run_pass(_settings(tmp_path, app_data))
     assert [e.stage for e in result.errors] == ["unifi"]
     assert (tmp_path / "dynamic" / "apps.yml").exists()
+
+
+@respx.mock
+def test_own_lost_record_is_adopted(client: UnifiClient, tmp_path: Path) -> None:
+    respx.get(BASE).mock(return_value=_page(_record("lost", "a.example.com")))
+    own = _own(tmp_path)
+    result = reconcile(client, _state("a.example.com"), IP, own)
+    assert result.adopt == {"a.example.com": "lost"}
+    assert result.conflicts == []
+    assert [m for m in respx.calls if m.request.method != "GET"] == []
+    assert own.unifi_records == {"a.example.com": "lost"}
+    assert json.loads((tmp_path / "ownership.json").read_text())["unifi_records"] == {
+        "a.example.com": "lost"
+    }
+
+
+@respx.mock
+def test_create_is_not_retried_after_a_read_timeout(client: UnifiClient, tmp_path: Path) -> None:
+    respx.get(BASE).mock(return_value=_page())
+    post = respx.post(BASE).mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(StageError) as err:
+        reconcile(client, _state("a.example.com"), IP, _own(tmp_path))
+    assert post.call_count == 1
+    assert err.value.retriable

@@ -105,6 +105,19 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
 
     client = cloudflare.CloudflareClient(creds)
     try:
+        # A public name that already belongs to someone else is skipped entirely: no ingress,
+        # no Access app, no DNS. One read up front covers all three stages.
+        try:
+            clashes = cloudflare.unmanaged_clashes(state, client.list_dns_records())
+        except StageError as exc:
+            fail(exc)
+            return errors
+        for hostname in sorted(clashes):
+            log.warning(
+                "cloudflare conflict: unmanaged record, route not published",
+                extra={"hostname": hostname},
+            )
+        state = cloudflare.without_clashes(state, clashes)
         tunnel_ok = True
         try:
             plan = cloudflare.reconcile_tunnel(client, state, dry_run=dry_run)
@@ -116,6 +129,7 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
 
         # Until the Access plan is known and applied, no access-true name may be published.
         withheld = frozenset(cloudflare.access_hostnames(state))
+        unprotected: frozenset[str] = frozenset()
         access_plan: cloudflare.AccessPlan | None = None
         try:
             access_plan = cloudflare.plan_access_from_api(
@@ -130,7 +144,7 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
             fail(exc)
             if access_plan is not None:
                 # Apps that already existed are still protected; only new ones must wait.
-                withheld = access_plan.missing
+                withheld = unprotected = access_plan.missing
 
         try:
             dns_plan = cloudflare.reconcile_dns(
@@ -139,6 +153,7 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
                 dry_run=dry_run,
                 publish=tunnel_ok,
                 withheld=frozenset() if dry_run else withheld,
+                unprotected=frozenset() if dry_run else unprotected,
             )
             if dry_run:
                 print(dns_plan.describe())

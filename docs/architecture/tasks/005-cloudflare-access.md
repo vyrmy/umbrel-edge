@@ -43,3 +43,9 @@ Service tokens, SSO providers, device posture checks.
 - The task 004 gate (`published()`) is replaced by `external_routes()`, which returns every external route.
 - The API token already needs Access Apps and Policies Edit. Reusable policies sit under the same permission, but if the policy calls return 403, check that scope first.
 - Live acceptance is still pending, so status stays "in-progress".
+
+### Review fixes
+
+- A public name that already has an unmanaged DNS record is treated as a conflict for all three Cloudflare stages: no ingress entry, no Access app, no DNS change.
+- When an Access app cannot be created, a managed DNS record for that name is deleted, so it is never public without Access. A failure to list apps does not delete anything.
+- POSTs are not retried after a transport error other than a failed connection, because the resource may already exist. UniFi adopts an unowned record that matches the wanted address, and duplicate managed Access policies are deleted.

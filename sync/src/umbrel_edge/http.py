@@ -10,6 +10,8 @@ import httpx
 from umbrel_edge.models import StageError
 
 ATTEMPTS = 3
+# Failures before any byte of the request was sent, so repeating even a POST is safe.
+SAFE_TO_REPEAT = (httpx.ConnectError, httpx.ConnectTimeout)
 
 
 def request_json(
@@ -31,6 +33,10 @@ def request_json(
             resp = http.request(method, path, **kwargs)
         except httpx.TransportError as exc:
             last = f"{method} {path}: {exc}"
+            # A POST that may have reached the server is not repeated: the next pass re-plans,
+            # whereas a blind retry could create the resource twice.
+            if method == "POST" and not isinstance(exc, SAFE_TO_REPEAT):
+                raise StageError(stage, last, retriable=True) from exc
             continue
         if resp.status_code == 429 or resp.status_code >= 500:
             last = f"{method} {path}: HTTP {resp.status_code}"
