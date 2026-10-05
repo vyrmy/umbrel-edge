@@ -35,3 +35,22 @@ Script rendering, including an app with a custom subdomain and an app on the ext
 
 ## Out of scope
 Changing the dashboard's look or the order of apps. Opening apps from `umbrel.home.arpa`, which keeps Umbrel's own behaviour.
+
+## Step 1 findings
+
+Recorded on 5 October 2026 with read-only GETs against `http://192.168.10.2/` (Traefik was not in place yet), plus a read of the public JS bundles it references.
+
+- **Link format.** The dashboard opens an app with `window.open(url, "_blank")`, where `url` comes from one function: if the app's URL starts with `umbrel:`, it returns `` `${location.protocol}//${location.hostname}:${port}` ``. So the link is `<current protocol>//<current host>:<port>`, with no path. The app launcher, the command palette and the app icon all go through it. A second `window.open` in the settings code opens `http://<ip>/confirm-static-ip` and is not affected (no mapped port).
+- **Content-Security-Policy.** `default-src 'self'` with no separate `script-src`, and `script-src-attr 'none'`. A same-origin `<script src="/__edge/launcher.js">` is allowed. An inline script would not be, which is why the tag points at a file served on the same route.
+- **Compression.** The HTML comes back uncompressed even with `Accept-Encoding: gzip, deflate, br, zstd`, so step 4 is not needed. The plugin also handles gzip if that ever changes, but not brotli or zstd.
+- **Other.** `/__edge/launcher.js` on the dashboard upstream returns the SPA shell (HTTP 200), so the `PathPrefix(/__edge/)` router must outrank the umbrel router. It has `priority: 1000`.
+- **Verdict.** Decision 13 is not ruled out and is unchanged.
+
+## Implementation notes
+
+- Plugin: `github.com/packruler/rewrite-body` v1.2.0, pinned in `vyrmy-edge/traefik/traefik.yml` under `experimental.plugins`. It is a fork of Traefik's own rewrite-body plugin with gzip support. The last release is from November 2022, but the last commit to the repo is from May 2024 and it is the only maintained body-rewrite plugin for Traefik that I found. Traefik downloads it from GitHub at start, so the Traefik container needs internet access then, and fails to start if the download fails. Traefik v3.7.13 is already pinned in the compose file.
+- The rewrite is a single regex, `</head>` to the script tag plus `</head>`, on `text/html` GET responses of the umbrel route only. `lastModified: true` keeps the upstream header.
+- `sync` serves `/__edge/launcher.js` from its health server (`:9000`) with `Cache-Control: no-cache`. The script is regenerated every pass and swapped in memory, so it is also current for `--dry-run` output. Traefik reaches it at `http://vyrmy-edge_sync_1:9000`.
+- Only the ports of the manifests are mapped, which is what the dashboard uses. A custom `upstream_port` in `edge.yaml` does not change the map.
+- Docker compose is unchanged. The traefik service needs a restart once to load the plugin, and `traefik.yml` is a bind mount, so the owner must update the app.
+- The golden file is `sync/tests/fixtures/golden/umbrel-route.yml`. Regenerate it by hand if the middleware changes on purpose.

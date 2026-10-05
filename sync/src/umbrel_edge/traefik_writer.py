@@ -10,11 +10,18 @@ from typing import Any
 
 import yaml
 
+from umbrel_edge.discovery import DASHBOARD
 from umbrel_edge.models import DesiredState, Route, StageError
 
 FILE_NAME = "apps.yml"
 # Docker networks only. The LAN (192.168.0.0/16) cannot reach the dashboard entrypoint.
 DASHBOARD_SOURCES = ["10.0.0.0/8", "172.16.0.0/12"]
+# sync's own server, reached over the edge bridge (container names use the underscore form).
+SYNC_URL = "http://vyrmy-edge_sync_1:9000"
+LAUNCHER_PATH = "/__edge/"
+LAUNCHER_TAG = f'<script src="{LAUNCHER_PATH}launcher.js"></script>'
+# Wins over the umbrel router, whose rule is shorter.
+ASSETS_PRIORITY = 1000
 
 
 def render(state: DesiredState, domain: str) -> str:
@@ -34,10 +41,7 @@ def render(state: DesiredState, domain: str) -> str:
             "rule": f"Host(`{route.hostname}`)",
             "entryPoints": ["websecure"],
             "service": name,
-            "tls": {
-                "certResolver": "cloudflare",
-                "domains": [{"main": domain, "sans": [f"*.{domain}"]}],
-            },
+            "tls": _tls(domain),
         }
         service: dict[str, Any] = {
             "loadBalancer": {"servers": [{"url": route.upstream}], "passHostHeader": True}
@@ -47,15 +51,47 @@ def render(state: DesiredState, domain: str) -> str:
             transports["upstream-self-signed"] = {"insecureSkipVerify": True}
             service["loadBalancer"]["serversTransport"] = "upstream-self-signed"
         services[name] = service
+    middlewares: dict[str, Any] = {
+        "docker-only": {"ipAllowList": {"sourceRange": DASHBOARD_SOURCES}}
+    }
+    dashboard = next((r for r in state.routes if r.app_id == DASHBOARD.id), None)
+    if dashboard is not None:
+        # Task 007: the dashboard route only. Its HTML gets the launcher tag, and
+        # /__edge/ goes to sync, which serves launcher.js.
+        routers[_name(dashboard)]["middlewares"] = ["launcher-inject"]
+        routers["edge-assets"] = {
+            "rule": f"Host(`{dashboard.hostname}`) && PathPrefix(`{LAUNCHER_PATH}`)",
+            "priority": ASSETS_PRIORITY,
+            "entryPoints": ["websecure"],
+            "service": "edge-sync",
+            "tls": _tls(domain),
+        }
+        services["edge-sync"] = {"loadBalancer": {"servers": [{"url": SYNC_URL}]}}
+        middlewares["launcher-inject"] = {
+            "plugin": {
+                "rewrite-body": {
+                    "rewrites": [{"regex": "</head>", "replacement": LAUNCHER_TAG + "</head>"}],
+                    "monitoring": {"methods": ["GET"], "types": ["text/html"]},
+                    "lastModified": True,
+                }
+            }
+        }
     http: dict[str, Any] = {
         "routers": routers,
         "services": services,
-        "middlewares": {"docker-only": {"ipAllowList": {"sourceRange": DASHBOARD_SOURCES}}},
+        "middlewares": middlewares,
     }
     if transports:
         http["serversTransports"] = transports
     header = "# Written by umbrel-edge sync. Do not edit: changes are overwritten.\n"
     return header + yaml.safe_dump({"http": http}, sort_keys=True, default_flow_style=False)
+
+
+def _tls(domain: str) -> dict[str, Any]:
+    return {
+        "certResolver": "cloudflare",
+        "domains": [{"main": domain, "sans": [f"*.{domain}"]}],
+    }
 
 
 def write(state: DesiredState, domain: str, directory: Path) -> bool:

@@ -1,0 +1,45 @@
+# Golden file for the launcher middleware and its routers (task 007).
+middlewares:
+  launcher-inject:
+    plugin:
+      rewrite-body:
+        lastModified: true
+        monitoring:
+          methods:
+          - GET
+          types:
+          - text/html
+        rewrites:
+        - regex: </head>
+          replacement: <script src="/__edge/launcher.js"></script></head>
+routers:
+  app-umbrel:
+    entryPoints:
+    - websecure
+    middlewares:
+    - launcher-inject
+    rule: Host(`umbrel.bebitwise.dev`)
+    service: app-umbrel
+    tls:
+      certResolver: cloudflare
+      domains:
+      - main: bebitwise.dev
+        sans:
+        - '*.bebitwise.dev'
+  edge-assets:
+    entryPoints:
+    - websecure
+    priority: 1000
+    rule: Host(`umbrel.bebitwise.dev`) && PathPrefix(`/__edge/`)
+    service: edge-sync
+    tls:
+      certResolver: cloudflare
+      domains:
+      - main: bebitwise.dev
+        sans:
+        - '*.bebitwise.dev'
+services:
+  edge-sync:
+    loadBalancer:
+      servers:
+      - url: http://vyrmy-edge_sync_1:9000

@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass
 
-from umbrel_edge import cloudflare, desired, discovery, traefik_writer, unifi
+from umbrel_edge import cloudflare, desired, discovery, launcher, traefik_writer, unifi
 from umbrel_edge.config import Settings, load_edge_config
 from umbrel_edge.health import HealthState
 from umbrel_edge.models import DesiredState, EdgeConfig, StageError
@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 class PassResult:
     state: DesiredState | None
     errors: list[StageError]
+    launcher_js: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -33,6 +34,7 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
         config = load_edge_config(settings.config_path)
         manifests = discovery.discover(settings.app_data_root)
         state = desired.build(manifests, config)
+        launcher_js = launcher.render(state.port_map({m.id: m for m in manifests}))
     except StageError as exc:
         log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
         return PassResult(state=None, errors=[exc])
@@ -40,13 +42,14 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
     if dry_run:
         print(traefik_writer.render(state, config.domain))
         print(json.dumps([r.model_dump() for r in state.routes], indent=2))
+        print(f"/__edge/launcher.js would serve:\n{launcher_js}")
         try:
             _unifi(state, config, settings, dry_run=True)
         except StageError as exc:
             log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
             errors.append(exc)
         errors += _cloudflare(state, config, dry_run=True)
-        return PassResult(state=state, errors=errors)
+        return PassResult(state=state, errors=errors, launcher_js=launcher_js)
 
     try:
         _traefik(state, config.domain, settings)
@@ -59,7 +62,7 @@ def run_pass(settings: Settings, *, dry_run: bool = False) -> PassResult:
         log.error("stage failed", extra={"stage": exc.stage, "detail": exc.message})
         errors.append(exc)
     errors += _cloudflare(state, config, dry_run=False)
-    return PassResult(state=state, errors=errors)
+    return PassResult(state=state, errors=errors, launcher_js=launcher_js)
 
 
 def _traefik(state: DesiredState, domain: str, settings: Settings) -> None:
@@ -158,6 +161,7 @@ def run_forever(settings: Settings, health: HealthState) -> None:
         health.record(
             routes=len(result.state.routes) if result.state else 0,
             errors=[{"stage": e.stage, "message": e.message} for e in result.errors],
+            launcher_js=result.launcher_js,
         )
         _wait(settings)
 
