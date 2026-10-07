@@ -196,4 +196,13 @@ def test_forward_auth_deny_is_overridden_only_explicitly() -> None:
 
 
 def test_forward_auth_deny_defaults_to_authentik() -> None:
-    assert _config().forward_auth_deny == ["authentik"]
+    assert _config().forward_auth_deny == ["authentik", "denny-authentik"]
+
+
+def test_default_on_leaves_the_community_authentik_app_unprotected(app_data: Path) -> None:
+    # On this Umbrel Authentik comes from the community store as `denny-authentik`.
+    config = _config()
+    config.defaults.forward_auth = True
+    authentik = AppManifest(id="denny-authentik", name="Authentik", port=9000)
+    state = build([*discover(app_data), authentik], config)
+    assert {r.app_id: r.forward_auth for r in state.routes}["denny-authentik"] is False

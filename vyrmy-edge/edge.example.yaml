@@ -29,6 +29,7 @@ external_deny:
 # Authentik serves the login, so protecting it would lock everyone out.
 forward_auth_deny:
   - authentik
+  - denny-authentik
 
 # Ignored entirely: no route, no records.
 exclude:

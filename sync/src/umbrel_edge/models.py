@@ -98,7 +98,7 @@ class EdgeConfig(BaseModel):
         "vyrmy-edge",
     ]
     # Authentik serves the login itself, so putting it behind forward auth locks everyone out.
-    forward_auth_deny: list[str] = ["authentik"]
+    forward_auth_deny: list[str] = ["authentik", "denny-authentik"]
     exclude: list[str] = ["mosquitto"]
     access: AccessSettings
     forward_auth: ForwardAuthSettings | None = None
