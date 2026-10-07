@@ -2,7 +2,7 @@
 
 Recorded 5 October 2026 for task 006. For each installed app: whether it has a login of its own once Umbrel's app-proxy login is turned off, what an unauthenticated visitor could do (risk), and what SSO it supports for the Authentik work. Sources were the Umbrel app store compose files and manifests (getumbrel/umbrel-apps and dennysubke/dennys-umbrel-app-store) and upstream docs. Ten first-pass claims were corrected by a second review. Nothing was tested against the live apps, so "First visitor claims admin" means the app is only safe once its setup is finished, and published default passwords count as no protection until changed.
 
-"Umbrel auth" is the state after 5 October: *off* where it was turned off for task 006, otherwise unchanged. Remember that the "IoT to Umbrel" firewall rule lets IoT reach every port on `192.168.10.2`, so an app with no login of its own is open to IoT devices as well as Main and the VPN.
+"Umbrel auth" is the state after 5 October: *off* where it was turned off for task 006, otherwise unchanged. How each app can sign in through Authentik is in [sso-support.md](sso-support.md). Remember that the "IoT to Umbrel" firewall rule lets IoT reach every port on `192.168.10.2`, so an app with no login of its own is open to IoT devices as well as Main and the VPN.
 
 | App | Own login | Risk without Umbrel auth | SSO | Umbrel auth | Note |
 |---|---|---|---|---|---|
