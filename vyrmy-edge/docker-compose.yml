@@ -70,7 +70,12 @@ services:
       # so once the default route is on the LAN it would be sent to the UniFi gateway.
       - "host.docker.internal:${GATEWAY_IP:-10.21.0.1}"
     networks:
-      default: {}
+      default:
+        # Apps on umbrel_main_network reach these names at Traefik through Docker's DNS,
+        # since nothing on the Umbrel can reach 192.168.10.4 (macvlan parent isolation).
+        # OIDC apps need it for back-channel calls to Authentik.
+        aliases:
+          - auth.bebitwise.dev
       edge: {}
       lan:
         ipv4_address: 192.168.10.4
@@ -80,32 +85,18 @@ services:
         # 192.168.10.4 rather than being NATed out through the host. Needs Engine 28+.
         gw_priority: 1
 
-  # A macvlan child cannot talk to its parent interface, so the Umbrel host, and every app
-  # behind its NAT, cannot reach 192.168.10.4. This gives the host its own macvlan interface
-  # on enp2s0, 192.168.10.5, and a /32 route to the proxy through it. Apps then reach
-  # <app>.bebitwise.dev the same way LAN clients do: OIDC back-channel calls to Authentik,
-  # and Uptime Kuma's monitors. Removed again when the container stops.
+  # One-shot cleanup of the edge-shim host interface that 0.2.1 created. Kept under the
+  # same name for one release so the old container is replaced; drop it after 0.3.0.
   lan-shim:
     image: traefik:v3.7.13
-    restart: on-failure
+    restart: "no"
     network_mode: host
     cap_add:
       - NET_ADMIN
     entrypoint:
       - sh
       - -c
-      - |
-        set -e
-        down() { ip link del edge-shim 2>/dev/null || true; echo "edge-shim removed"; exit 0; }
-        trap down TERM INT
-        ip link del edge-shim 2>/dev/null || true
-        ip link add edge-shim link enp2s0 type macvlan mode bridge
-        ip link set edge-shim address 02:42:c0:a8:0a:05
-        ip addr add 192.168.10.5/32 dev edge-shim
-        ip link set edge-shim up
-        ip route replace 192.168.10.4/32 dev edge-shim src 192.168.10.5
-        echo "edge-shim up: this host reaches 192.168.10.4 from 192.168.10.5"
-        sleep 2147483647 & wait
+      - ip link del edge-shim 2>/dev/null || true; echo "edge-shim removed"
 
   # Outbound-only tunnel connector. Ingress comes from the Cloudflare API (written by sync),
   # so there is no config file. It reaches Traefik by name over the edge bridge.
