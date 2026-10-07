@@ -44,9 +44,12 @@ access:
 # forward_auth: true. In Authentik, give each protected app a Proxy provider in
 # forward auth mode with its external host, and assign it to the embedded outpost.
 # Turn Umbrel app auth off for each protected app and for Authentik itself.
+# Point both at Authentik's server container on umbrel_main_network, not at the
+# Umbrel app port: umbrelOS's app proxy drops X-Forwarded-Host, which the outpost
+# needs to tell apps apart.
 # forward_auth:
-#   address: http://host.docker.internal:<authentik port>/outpost.goauthentik.io/auth/traefik
-#   outpost_url: http://host.docker.internal:<authentik port>
+#   address: http://denny-authentik_server_1:9000/outpost.goauthentik.io/auth/traefik
+#   outpost_url: http://denny-authentik_server_1:9000
 #   # response_headers defaults to the X-authentik-* list from Authentik's Traefik docs.
 
 # Per-app overrides, keyed by Umbrel app id.
