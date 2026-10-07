@@ -8,7 +8,7 @@ Rules that apply to every app below:
 - "Internal only" means the app id is in `external_deny`.
 - Forward auth and trusted header protect only the hostname path. Until the UniFi firewall blocks direct access to app ports on `192.168.10.2`, an app with Umbrel's login off can still be opened at its port without a login.
 - Forward-auth apps each get a "forward auth (single application)" Proxy provider in Authentik, on the embedded outpost, gated to Household or Household Admins as below. Paths that an app guards with its own key are exempted in Authentik with `skip_path_regex`, so phone apps and tools keep working: `^/api(/.*)?$` on Radarr, Sonarr, Lidarr, Readarr, Prowlarr, Bazarr and changedetection, and `^/api/push/.*$` on Uptime Kuma. Nothing on Transmission, whose RPC has no auth of its own. Edge needs no bypass setting of its own: the outpost answers 200 for those paths.
-- Hostname renames planned with the Authentik setup: `denny-authentik` to `auth`, `denny-actualbudget` to `actual`, `denny-kitchenowl` to `kitchenowl`, `denny-hoarder` to `karakeep`, `denny-manyfold` to `manyfold`, `denny-olivetin` to `olivetin`. OIDC redirect URIs in Authentik use these names.
+- Hostname renames planned with the Authentik setup: `denny-authentik` to `auth`, `denny-actualbudget` to `actual`, `denny-kitchenowl` to `kitchenowl`, `denny-hoarder` to `karakeep`, `denny-manyfold` to `manyfold`, `denny-olivetin` to `olivetin`, `denny-changedetection` to `changedetection`, `denny-librewolf` to `librewolf`. OIDC redirect URIs in Authentik use these names.
 
 | App | Method | External | Notes |
 |---|---|---|---|
@@ -54,7 +54,7 @@ Rules that apply to every app below:
 | GlassHome | Forward auth | Owner's call | Login method not confirmed |
 | **App's own login only, no Authentik** | | | |
 | Home Assistant | Own login with MFA | Owner's call | Companion app cannot do forward auth; OIDC through HACS later if wanted |
-| Jellyfin | Own accounts, or LDAP | Yes | TV and phone apps need real passwords. Optional: Authentik LDAP outpost with the official LDAP plugin for central accounts. The 9p4 SSO plugin is archived |
+| Jellyfin | Authentik LDAP (official LDAP plugin) | Yes | Central accounts that still work in TV and phone apps; users type their Authentik password in Jellyfin. The 9p4 SSO plugin is archived. Chosen 7 October 2026 |
 | Overseerr | Plex or Jellyfin sign-in | Yes | OIDC only after moving to Seerr |
 | n8n | Own login | Yes | Forward auth would block webhooks; OIDC needs Enterprise |
 | **No login needed (Cloudflare Access covers outside)** | | | |
