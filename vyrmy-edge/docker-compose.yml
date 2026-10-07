@@ -112,7 +112,7 @@ services:
       edge: {}
 
   sync:
-    image: ghcr.io/vyrmy/umbrel-edge-sync:main@sha256:7a080364d7ba7527b4f8c46137cc489b47e1e533ef282342fde4d35fcf092d64
+    image: ghcr.io/vyrmy/umbrel-edge-sync:main@sha256:1573d20020d873902b9dcf86049c2b2ac3a36ae3b1c385b9b1d23c0d9d3bae93
     restart: on-failure
     depends_on:
       init:
