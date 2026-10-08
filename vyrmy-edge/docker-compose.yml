@@ -43,6 +43,9 @@ services:
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.web.http.redirections.entrypoint.permanent=true
       - --entrypoints.websecure.address=:443
+      # Strip headers whose names alias others (X_authentik_email for X-Authentik-Email),
+      # so a client cannot spoof the identity headers forward auth sets (Traefik 3.7.12+).
+      - --entrypoints.websecure.http.aliasHeadersStrategy=delete
       - --entrypoints.websecure.http.tls.certresolver=cloudflare
       - --entrypoints.websecure.http.tls.domains[0].main=bebitwise.dev
       - --entrypoints.websecure.http.tls.domains[0].sans=*.bebitwise.dev

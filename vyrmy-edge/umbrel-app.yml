@@ -4,7 +4,7 @@ name: Edge
 tagline: HTTPS hostnames for every app, at home and away
 icon: https://raw.githubusercontent.com/traefik/traefik/master/docs/content/assets/img/traefik.logo.png
 category: networking
-version: "0.3.1"
+version: "0.3.2"
 port: 18080
 description: >-
   Gives every app on this Umbrel its own hostname under bebitwise.dev, with a
@@ -27,9 +27,10 @@ repo: https://github.com/vyrmy/umbrel-edge
 support: https://github.com/vyrmy/umbrel-edge/issues
 gallery: []
 releaseNotes: >-
-  Turns off Traefik's access log. It recorded full URLs, and some apps put
-  short-lived tokens in the query string, so those ended up in the app logs.
-  Errors are still logged.
+  Hardens the HTTPS entry point: request headers whose names stand in for
+  others, such as X_authentik_email for X-Authentik-Email, are now removed,
+  so nobody can pose as a signed-in user to apps behind Authentik forward
+  auth. Traefik's access log stays off.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""

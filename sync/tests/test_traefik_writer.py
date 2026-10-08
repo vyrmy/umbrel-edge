@@ -104,3 +104,10 @@ def test_access_log_is_off() -> None:
     # Access log lines carry full URLs, and some apps put tokens in the query string
     # (Umbrel Files' /api/files/view?token=). Turn it on only briefly when debugging.
     assert _traefik_flags().get("accesslog", "false") == "false"
+
+
+def test_websecure_deletes_alias_headers() -> None:
+    # Forward auth sets X-authentik-*; a client-sent alias such as X_authentik_email
+    # would reach PHP apps (Firefly III's trusted header) as the same variable.
+    flags = _traefik_flags()
+    assert flags.get("entrypoints.websecure.http.aliasheadersstrategy") == "delete"
