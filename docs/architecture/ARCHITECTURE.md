@@ -107,7 +107,7 @@ Non-secret configuration lives in `${APP_DATA_DIR}/data/edge.yaml`. The dashboar
 
 **Observability.**
 
-- Logs are structured JSON on stdout, visible in the Umbrel app logs.
+- Logs are structured JSON on stdout, visible in the Umbrel app logs. Traefik keeps its error log but has no access log, because some apps put tokens in query strings (Umbrel Files' `/api/files/view?token=`). Turn it on briefly with `--accesslog=true` when debugging.
 - `sync` serves `GET /healthz` on the bridge only.
 - Uptime Kuma (already installed) monitors `/healthz` and each app hostname. It alerts you through whatever notifier you set in Uptime Kuma. It runs on the Umbrel, which cannot reach `192.168.10.4`, so it reaches a hostname only if that name is a network alias on Traefik's `umbrel_main_network` endpoint (see Risks). Add the names it monitors to that alias list.
 

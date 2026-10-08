@@ -34,7 +34,8 @@ services:
       - --global.checknewversion=false
       - --global.sendanonymoususage=false
       - --log.level=INFO
-      - --accesslog=true
+      # No access log: URLs can carry tokens in the query string. Add --accesslog=true
+      # briefly when debugging.
       - --api.dashboard=true
       - --api.insecure=false
       - --entrypoints.web.address=:80

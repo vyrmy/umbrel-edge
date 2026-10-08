@@ -98,3 +98,9 @@ def test_static_flags_match_what_the_writer_references(config: EdgeConfig, app_d
     # A plugin that fails to download or load must not stop Traefik starting.
     assert flags.get("experimental.abortonpluginfailure", "false") == "false"
     assert flags["providers.file.directory"] == "/data/traefik/dynamic"
+
+
+def test_access_log_is_off() -> None:
+    # Access log lines carry full URLs, and some apps put tokens in the query string
+    # (Umbrel Files' /api/files/view?token=). Turn it on only briefly when debugging.
+    assert _traefik_flags().get("accesslog", "false") == "false"
