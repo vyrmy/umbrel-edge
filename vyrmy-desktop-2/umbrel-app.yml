@@ -5,7 +5,7 @@ tagline: One person's browser and Signal, kept signed in
 icon: https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/webtop-logo.png
 category: social
 # Set by scripts/pin-desktop-image to the date of the image it pins.
-version: "0.0.0"
+version: "2026.10.13"
 port: 18102
 # Selkies streams the desktop with browser APIs that only work over HTTPS, so the
 # dashboard opens the app port with Umbrel's own TLS at home.
