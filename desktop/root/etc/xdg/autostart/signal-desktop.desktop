@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Signal
+Comment=Start Signal with the desktop. The tray icon keeps it running when its window is closed.
+Exec=/usr/local/bin/wrapped-signal --use-tray-icon
+Icon=signal-desktop
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

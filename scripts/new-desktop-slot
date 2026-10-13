@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Add Desktop <n> to the store as a copy of Desktop 1 (ARCHITECTURE.md, decision 16).
+
+Usage: scripts/new-desktop-slot <n>
+
+Slot n gets app id vyrmy-desktop-<n> and Umbrel port 18100 + n. Commit the new folder,
+then follow the steps it prints.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TEMPLATE = ROOT / "vyrmy-desktop-1"
+FILES = ("umbrel-app.yml", "docker-compose.yml")
+BASE_PORT = 18100
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 2 or not argv[1].isdigit() or not 2 <= int(argv[1]) <= 99:
+        print(__doc__.strip(), file=sys.stderr)
+        print("\nn must be a whole number from 2 to 99.", file=sys.stderr)
+        return 2
+    n = int(argv[1])
+    target = ROOT / f"vyrmy-desktop-{n}"
+    if target.exists():
+        print(f"{target.name} already exists", file=sys.stderr)
+        return 1
+    replacements = [
+        ("vyrmy-desktop-1", f"vyrmy-desktop-{n}"),
+        ("Desktop 1", f"Desktop {n}"),
+        (f"port: {BASE_PORT + 1}", f"port: {BASE_PORT + n}"),
+    ]
+    target.mkdir()
+    for name in FILES:
+        text = (TEMPLATE / name).read_text()
+        for old, new in replacements:
+            if old not in text and name == "umbrel-app.yml":
+                raise SystemExit(f"{old!r} not found in {TEMPLATE.name}/{name}")
+            text = text.replace(old, new)
+        (target / name).write_text(text)
+    print(f"Created {target.name} on Umbrel port {BASE_PORT + n}.")
+    print(
+        f"""
+Next:
+1. Commit and push. Install Desktop {n} on the Umbrel and share it with one person only.
+2. Add to edge.yaml under apps (pick the hostname):
+     vyrmy-desktop-{n}:
+       subdomain: desk-<name>
+       external: true
+       upstream_host: vyrmy-desktop-{n}_desktop_1
+       upstream_port: 3000
+3. In Authentik, add its forward auth provider and application, bound to that one person
+   (docs/architecture/tasks/008-personal-desktops.md, step 4)."""
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

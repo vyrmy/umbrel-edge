@@ -1,0 +1,41 @@
+manifestVersion: 1
+id: vyrmy-desktop-1
+name: Desktop 1
+tagline: One person's browser and Signal, kept signed in
+icon: https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/webtop-logo.png
+category: social
+# Set by scripts/pin-desktop-image to the date of the image it pins.
+version: "0.0.0"
+port: 18101
+# Selkies streams the desktop with browser APIs that only work over HTTPS, so the
+# dashboard opens the app port with Umbrel's own TLS at home.
+requiresHttps: true
+storage:
+  dataRoot: data
+description: >-
+  A desktop in your browser for one person, with Chromium and Signal already
+  running. Sign in to your email, calendar, WhatsApp Web and anything else
+  once, and it stays signed in wherever you open it from.
+
+
+  Each Desktop app holds one person's sessions, so share it with that person
+  only (right-click the app, Share with users). Away from home it opens at its
+  own address behind Authentik, and only the person it belongs to can sign in.
+
+
+  Signal needs linking once: open Signal, then scan the code with Signal on
+  your phone (Settings, Linked devices).
+developer: vyrmy
+website: https://github.com/vyrmy/umbrel-edge
+submitter: vyrmy
+submission: https://github.com/vyrmy/umbrel-edge
+repo: https://github.com/vyrmy/umbrel-edge
+support: https://github.com/vyrmy/umbrel-edge/issues
+gallery: []
+releaseNotes: >-
+  Rebuilt every week with the latest Chromium and Signal. Update when this
+  appears: Signal stops working on builds more than about 90 days old.
+dependencies: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""

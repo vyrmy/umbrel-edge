@@ -63,3 +63,12 @@ apps: {}
 #  app-with-tls:
 #    upstream_scheme: https
 #    upstream_port: 8443
+#  denny-authentik:      # logins from outside need Authentik reachable; it has its own login
+#    subdomain: auth
+#    external: true
+#    access: false
+#  vyrmy-desktop-1:      # decision 15: straight to the container, so Umbrel's login stays on
+#    subdomain: desk-sam #   for the Umbrel port; forward_auth comes on by itself
+#    external: true
+#    upstream_host: vyrmy-desktop-1_desktop_1
+#    upstream_port: 3000

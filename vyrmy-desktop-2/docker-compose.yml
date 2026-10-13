@@ -1,0 +1,32 @@
+version: "3.7"
+
+services:
+  # Umbrel's login stays on for the port on the Umbrel, so only the person this app is
+  # shared with (and the owner) can open it there. Edge sends its hostname straight to
+  # the container instead, behind Authentik (ARCHITECTURE.md, decision 15).
+  app_proxy:
+    environment:
+      APP_HOST: vyrmy-desktop-2_desktop_1
+      APP_PORT: 3000
+
+  desktop:
+    # Built from desktop/ in this repo. scripts/pin-desktop-image updates the digest.
+    image: ghcr.io/vyrmy/umbrel-desktop:main@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    restart: on-failure
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Europe/London
+      LC_ALL: en_GB.UTF-8
+      TITLE: Desktop 2
+      # The image is rebuilt rather than patched in place, so nobody needs root in here.
+      DISABLE_SUDO: "true"
+      # Session links would let a second browser watch or drive this desktop.
+      SELKIES_ENABLE_SHARING: "false|locked"
+    volumes:
+      - ${APP_DATA_DIR}/data/config:/config
+    shm_size: "1gb"
+    # Without Docker's seccomp filter Chromium and Signal run their own sandboxes, which
+    # are stricter for web content; with it they fall back to --no-sandbox.
+    security_opt:
+      - seccomp=unconfined

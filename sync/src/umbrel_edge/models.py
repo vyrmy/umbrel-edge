@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, model_validator
 
 SUBDOMAIN_RE = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+# Docker's own rule for container names.
+CONTAINER_RE = r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
 
 # The headers Authentik's Traefik docs pass through from the outpost to the app.
 DEFAULT_AUTH_RESPONSE_HEADERS = [
@@ -47,7 +49,16 @@ class AppPolicy(BaseModel):
     access: bool | None = None
     upstream_port: int | None = Field(default=None, ge=1, le=65535)
     upstream_scheme: Literal["http", "https"] = "http"
+    # A container on umbrel_main_network. Traefik then skips umbreld's app gateway, so
+    # Umbrel's login can stay on for the app's port on the Umbrel (decision 15).
+    upstream_host: str | None = Field(default=None, pattern=CONTAINER_RE)
     forward_auth: bool | None = None
+
+    @model_validator(mode="after")
+    def _upstream_host_needs_port(self) -> AppPolicy:
+        if self.upstream_host is not None and self.upstream_port is None:
+            raise ValueError("upstream_host needs upstream_port, the container's own port")
+        return self
 
 
 class Defaults(BaseModel):
@@ -104,11 +115,21 @@ class EdgeConfig(BaseModel):
     forward_auth: ForwardAuthSettings | None = None
     apps: dict[str, AppPolicy] = {}
 
+    def forward_auth_for(self, app_id: str) -> bool:
+        """Whether app_id's route sits behind Authentik (decisions 14 and 15)."""
+        policy = self.apps.get(app_id, AppPolicy())
+        if policy.forward_auth is not None:
+            return policy.forward_auth
+        if app_id in self.forward_auth_deny:
+            return False
+        # Past umbreld's app gateway there is no Umbrel login, so protect it by default.
+        return self.defaults.forward_auth or policy.upstream_host is not None
+
     @model_validator(mode="after")
     def _forward_auth_needs_settings(self) -> EdgeConfig:
         if self.forward_auth is not None:
             return self
-        wanting = sorted(app_id for app_id, p in self.apps.items() if p.forward_auth)
+        wanting = sorted(app_id for app_id in self.apps if self.forward_auth_for(app_id))
         if self.defaults.forward_auth:
             wanting.insert(0, "defaults.forward_auth")
         if wanting:

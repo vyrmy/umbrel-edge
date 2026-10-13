@@ -1,6 +1,6 @@
 # Authentication plan per app
 
-Agreed 7 October 2026 for task 006, from [app-auth-audit.md](app-auth-audit.md) (what each app exposes without a login) and [sso-support.md](sso-support.md) (how each can use Authentik). Authentik itself is `denny-authentik`, served as `auth.bebitwise.dev`, internal only, never behind Access or forward auth.
+Agreed 7 October 2026 for task 006, from [app-auth-audit.md](app-auth-audit.md) (what each app exposes without a login) and [sso-support.md](sso-support.md) (how each can use Authentik). Authentik itself is `denny-authentik`, served as `auth.bebitwise.dev`, never behind Access or forward auth. It was internal only until 13 October 2026, and is now external so logins work from outside (task 008).
 
 Rules that apply to every app below:
 
@@ -44,6 +44,7 @@ Rules that apply to every app below:
 | Homebridge | Forward auth | Internal only | Port 8581 open until the firewall change; app currently stopped |
 | ESPHome | Forward auth | Internal only | |
 | Obsidian, LibreWolf, Tor Browser | Forward auth | Internal only | Remote desktops with root terminals |
+| Desktop 1, Desktop 2 (`vyrmy-desktop-<n>`) | Forward auth, bound to one user each | Yes | Umbrel login stays on, because Edge goes straight to the container (decision 15); no sudo inside (task 008) |
 | Zigbee2MQTT | Uninstall | n/a | Stopped, replaced by Thread |
 | **Forward auth in front of the app's own login (two prompts)** | | | Admin tools |
 | AdGuard Home | Forward auth, Household Admins | Internal only | |

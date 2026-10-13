@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Chromium
+Comment=Start the browser with the desktop
+Exec=/usr/local/bin/wrapped-chromium
+Icon=chromium
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

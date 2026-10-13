@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Signal Desktop is Electron, so it gets the same sandbox handling as Webtop's
+# wrapped-chromium: its own sandbox when the container runs without Docker's seccomp
+# filter (the Umbrel apps set seccomp=unconfined), --no-sandbox otherwise.
+BIN=/opt/Signal/signal-desktop
+
+if [ "${PIXELFLUX_WAYLAND,,}" == "true" ]; then
+  WAYLAND="--ozone-platform=wayland"
+fi
+
+if grep -q 'Seccomp:.0' /proc/1/status; then
+  exec ${BIN} ${WAYLAND} "$@"
+else
+  exec ${BIN} ${WAYLAND} --no-sandbox "$@"
+fi

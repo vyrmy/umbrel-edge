@@ -62,17 +62,14 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
     else:
         external = d.external and manifest.id not in config.external_deny
     access = (d.access if policy.access is None else policy.access) and external
-    if policy.forward_auth is not None:
-        forward_auth = policy.forward_auth
-    else:
-        forward_auth = d.forward_auth and manifest.id not in config.forward_auth_deny
+    host = policy.upstream_host or "host.docker.internal"
     port = policy.upstream_port or manifest.port
     return Route(
         app_id=manifest.id,
         hostname=f"{subdomain}.{config.domain}",
-        upstream=f"{policy.upstream_scheme}://host.docker.internal:{port}",
+        upstream=f"{policy.upstream_scheme}://{host}:{port}",
         internal=internal,
         external=external,
         access=access,
-        forward_auth=forward_auth,
+        forward_auth=config.forward_auth_for(manifest.id),
     )
