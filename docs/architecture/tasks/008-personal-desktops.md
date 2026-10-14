@@ -81,3 +81,7 @@ Moving Obsidian and LibreWolf to per-person slots. Closing app ports at the UniF
 - Traefik's default 60-second `readTimeout` should not cut a websocket: on hijack, Go's server clears the read deadline it set while a background read was pending, which is the case for a body-less upgrade request. The idle check in Acceptance confirms it.
 - GitHub turns off scheduled workflows in a public repo after 60 days without activity. The weekly pin commit should count as activity, but if the desktops stop being offered updates, check the `desktop` workflow under Actions first.
 - Local checks: ruff, mypy and pytest pass, except `test_server_serves_script_uncached`, which needs to bind a local port and is blocked by the sandbox here; CI runs it. A local `docker build` of `desktop/` could not finish (Docker Desktop stopped during the base image pull), so the image is first built by the `desktop` workflow, whose smoke test checks Chromium, Signal and the wrappers.
+
+## Release results (14 October 2026)
+- Steps 1 to 3 done. The `desktop` workflow built the first image, its smoke test passed (Chromium, Signal, both wrappers, the autostart entries) and it pinned `umbrel-desktop@sha256:cb791d42…` in both slots at version `2026.10.13`. `umbrel-desktop` and `umbrel-edge-sync` both pull anonymously from GHCR, so no visibility change was needed.
+- Edge 0.4.0 pins `umbrel-edge-sync@sha256:9fce05df…`, built from the commit that adds `upstream_host`.
