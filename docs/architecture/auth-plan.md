@@ -54,7 +54,7 @@ Rules that apply to every app below:
 | ConvertX | Forward auth | Yes | Turn registration off |
 | GlassHome | Forward auth | Owner's call | Login method not confirmed |
 | **App's own login only, no Authentik** | | | |
-| Home Assistant | Own login with MFA | Owner's call | Companion app cannot do forward auth; OIDC through HACS later if wanted |
+| Home Assistant | Own login with MFA | Yes, without Access (24 October 2026) | Companion app and the claude.ai connector (`/api/mcp`) cannot do forward auth or Access; MFA on every user and the Cloudflare rate limit on `/auth/login_flow` (task 008); OIDC through HACS later if wanted |
 | Jellyfin | Authentik LDAP (official LDAP plugin) | Yes | Central accounts that still work in TV and phone apps; users type their Authentik password in Jellyfin. The 9p4 SSO plugin is archived. Chosen 7 October 2026 |
 | Overseerr | Plex or Jellyfin sign-in | Yes | OIDC only after moving to Seerr |
 | n8n | Own login | Yes | Forward auth would block webhooks; OIDC needs Enterprise |

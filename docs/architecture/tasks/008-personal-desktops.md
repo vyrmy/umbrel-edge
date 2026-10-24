@@ -28,15 +28,15 @@ Steps 1 and 2 are in this branch. The rest are the owner's, in this order.
 3. **Publish the image.** GitHub, Packages, `umbrel-desktop`, Package settings: make it public, as for `umbrel-edge-sync`. Then run the `desktop` workflow once by hand (Actions, desktop, Run workflow), so its smoke test pulls the image anonymously.
 4. **Harden Authentik before it goes public.** In Authentik's admin interface:
    - Flows and Stages, Stages, `default-authentication-mfa-validation`: device classes TOTP and WebAuthn, "Not configured action" set to "Force the user to configure an authenticator", with the TOTP and WebAuthn setup stages picked under "Configuration stages". Everyone then has MFA from their next login.
-   - Customization, Policies, create an Expression policy `superuser-via-tunnel`:
+   - Already done on 8 October 2026 by the SSO session: the deny stage `admin-home-only` with policy `admin-signin-via-cloudflare` stops superusers signing in through the tunnel. The rest of this bullet is how it works, for reference. Customization, Policies, create an Expression policy `superuser-via-tunnel`:
      ```python
      user = request.context.get("pending_user")
      return bool(user and user.is_superuser
                  and "HTTP_CF_CONNECTING_IP" in request.http_request.META)
      ```
      Then Stages, create a Deny stage `deny-superuser-via-tunnel`, and in Flows, `default-authentication-flow`, Stage Bindings, bind it at an order after the identification stage and before the user login stage, with "Evaluate when stage is run" ticked and `superuser-via-tunnel` bound to that stage binding. The Deny stage then runs only for a superuser coming through Cloudflare. Do not bind the policy to the password stage instead: a failed policy skips a stage rather than stopping the flow, so that would let a superuser in without a password.
-5. **Rate-limit the login in Cloudflare.** Security, WAF (Security rules in the newer dashboard), Rate limiting rules, one rule (the free plan allows one): when hostname equals `auth.bebitwise.dev` and URI path contains `/api/v3/flows/executor/` and method is `POST`, with the same IP, more than 10 requests in 10 seconds, block for 10 seconds.
-6. **Open Authentik to the outside.** In `edge.yaml`: `denny-authentik: {subdomain: auth, external: true, access: false}`. Works on Edge 0.3.2.
+5. **Rate-limit both logins in Cloudflare.** Security, WAF (Security rules in the newer dashboard), Rate limiting rules. The free plan allows one rule, matching on the URI path only (no hostname or method), counting by IP over 10 seconds. One rule covers Authentik and Home Assistant: URI Path contains `/api/v3/flows/executor/` OR URI Path contains `/auth/login_flow`; more than 10 requests in 10 seconds from one IP; block for 10 seconds.
+6. **Open Authentik to the outside.** In `edge.yaml`: `denny-authentik: {subdomain: auth, external: true, access: false}`. Works on Edge 0.3.2. The owner's full file for 24 October, with this, Home Assistant and both desktops, is `~/Documents/home-sso/edge-2026-10-24.yaml` (not in this public repo: it lists the Access emails).
 7. **Update Edge to 0.4.0** in the Umbrel app store. Earlier versions reject `upstream_host` as an unknown key and stop applying any change to `edge.yaml`.
 8. **Install Desktop 1 and Desktop 2** from the Vyrmy store. Settings, Users: share each with its one person, and leave "Require Umbrel login" on.
 9. **Route them.** In `edge.yaml`, under `apps` (pick each hostname; `forward_auth` comes on by itself):
