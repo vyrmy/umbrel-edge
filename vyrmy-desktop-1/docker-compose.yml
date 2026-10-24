@@ -26,7 +26,7 @@ services:
     volumes:
       - ${APP_DATA_DIR}/data/config:/config
     shm_size: "1gb"
-    # Without Docker's seccomp filter Chromium and Signal run their own sandboxes, which
-    # are stricter for web content; with it they fall back to --no-sandbox.
-    security_opt:
-      - seccomp=unconfined
+    # Docker's seccomp filter stays on. Without it Chromium and Signal try their own
+    # sandboxes, which need unprivileged user namespaces, and the Umbrel's kernel refuses
+    # them (credentials.cc: Permission denied), so both crashed at start. With the filter
+    # on, both launchers use --no-sandbox, as Umbrel's own Chromium app does.
