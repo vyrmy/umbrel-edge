@@ -11,7 +11,7 @@ services:
 
   desktop:
     # Built from desktop/ in this repo. scripts/pin-desktop-image updates the digest.
-    image: ghcr.io/vyrmy/umbrel-desktop:main@sha256:3307054460612a9e93b553ab60cd43127a8d1ae58219503c9b356d1d64cb3bce
+    image: ghcr.io/vyrmy/umbrel-desktop:main@sha256:a6ae346e15699541f6a2013d172dd247d972567e9d56c38f15514d3a80a851cb
     restart: on-failure
     environment:
       PUID: "1000"
