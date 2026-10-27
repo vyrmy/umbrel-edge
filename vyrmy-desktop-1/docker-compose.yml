@@ -33,8 +33,8 @@ services:
       SELKIES_ENABLE_PLAYER2: "false|locked"
       SELKIES_ENABLE_PLAYER3: "false|locked"
       SELKIES_ENABLE_PLAYER4: "false|locked"
-      # Empty: only pages from the desktop's own address may open the stream's websocket.
-      # Webtop's default, "*", lets any site the person visits try.
+      # Empty: only pages on the desktop's own host name (any port) may open the stream's
+      # websocket. Webtop's default, "*", lets any site the person visits try.
       SELKIES_ALLOWED_ORIGINS: ""
     volumes:
       - ${APP_DATA_DIR}/data/config:/config
