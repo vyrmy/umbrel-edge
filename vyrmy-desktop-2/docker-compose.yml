@@ -21,8 +21,21 @@ services:
       TITLE: Desktop 2
       # The image is rebuilt rather than patched in place, so nobody needs root in here.
       DISABLE_SUDO: "true"
-      # Session links would let a second browser watch or drive this desktop.
+      # Webtop turns Selkies' command messages on for its launcher, which lets anyone who
+      # can open the stream run shell commands. Nothing here uses the launcher.
+      SELKIES_COMMAND_ENABLED: "false|locked"
+      # Uploads and downloads through the stream, to and from /config/Desktop.
+      SELKIES_FILE_TRANSFERS: "none"
+      # Session links would let a second browser watch or drive this desktop. On the
+      # websocket transport, viewers and extra players are refused only with the last four.
       SELKIES_ENABLE_SHARING: "false|locked"
+      SELKIES_ENABLE_SHARED: "false|locked"
+      SELKIES_ENABLE_PLAYER2: "false|locked"
+      SELKIES_ENABLE_PLAYER3: "false|locked"
+      SELKIES_ENABLE_PLAYER4: "false|locked"
+      # Empty: only pages from the desktop's own address may open the stream's websocket.
+      # Webtop's default, "*", lets any site the person visits try.
+      SELKIES_ALLOWED_ORIGINS: ""
     volumes:
       - ${APP_DATA_DIR}/data/config:/config
     shm_size: "1gb"
