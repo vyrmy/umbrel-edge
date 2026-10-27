@@ -107,6 +107,8 @@ class EdgeConfig(BaseModel):
         "wireguard",
         "tailscale",
         "vyrmy-edge",
+        # The dashboard installs apps and opens a terminal on the host.
+        "umbrel",
     ]
     # Authentik serves the login itself, so putting it behind forward auth locks everyone out.
     forward_auth_deny: list[str] = ["authentik", "denny-authentik"]

@@ -24,6 +24,7 @@ external_deny:
   - wireguard
   - tailscale
   - vyrmy-edge
+  - umbrel          # the Umbrel dashboard: it installs apps and opens a host terminal
 
 # Never behind forward auth unless apps.<id>.forward_auth is set explicitly.
 # Authentik serves the login, so protecting it would lock everyone out.

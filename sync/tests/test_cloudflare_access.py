@@ -209,8 +209,10 @@ def test_pagination_and_4xx_error_stage(client: CloudflareClient) -> None:
 
 # --- ordering through a full pass ---
 
+# The dashboard is denied by default; these tests want a second public name beside jellyfin.
 _CONFIG = (
     "domain: bebitwise.dev\nproxy_ip: 192.168.10.4\naccess:\n  allowed_emails: [me@example.com]\n"
+    "apps:\n  umbrel:\n    external: true\n"
 )
 
 
