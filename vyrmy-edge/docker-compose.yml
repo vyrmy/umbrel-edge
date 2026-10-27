@@ -7,17 +7,42 @@ services:
       APP_HOST: vyrmy-edge_traefik_1
       APP_PORT: 8080
 
-  # Docker creates a missing bind-mount source as root, but sync runs as uid 1000.
-  # Make sure the directories sync writes to exist and belong to it. Reuses the
-  # Traefik image (Alpine) so nothing extra is pulled.
+  # Prepares the data folder before anything else starts. Reuses the Traefik image (Alpine)
+  # so nothing extra is pulled.
+  # - Docker creates a missing bind-mount source as root, but sync runs as uid 1000, so the
+  #   directories sync writes to are made here and given to it.
+  # - Traefik and cloudflared face the internet, so each gets only its own key from
+  #   secrets.env, as a file rewritten on every start, and neither mounts the data folder.
+  #   secrets.env stays the one file to edit; restart the app after changing it.
   init:
     image: traefik:v3.7.13
     restart: "no"
     user: "0:0"
     entrypoint:
       - sh
-      - -c
-      - mkdir -p /data/traefik/dynamic /data/state && chown 1000:1000 /data/traefik /data/traefik/dynamic /data/state
+      - -euc
+      - |
+        umask 077
+        mkdir -p /data/traefik/dynamic /data/state /data/acme /data/secrets/traefik /data/secrets/cloudflared
+        chown 1000:1000 /data/traefik /data/traefik/dynamic /data/state
+        # Edge 0.4.0 and earlier kept the certificate store at /data/acme.json.
+        if [ -f /data/acme.json ] && [ ! -e /data/acme/acme.json ]; then
+          cp -p /data/acme.json /data/acme/acme.json
+        fi
+        # secret KEY FILE UID: the last KEY= line of secrets.env, trimmed and unquoted,
+        # readable by UID only. Empty when the key is missing, as an unset variable was.
+        secret() {
+          value=$$(sed -n "s/^$$1=//p" /data/secrets.env 2>/dev/null | tail -n 1 | tr -d '\r' |
+            sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' -e 's/^"\(.*\)"$$/\1/' -e "s/^'\(.*\)'$$/\1/")
+          printf '%s' "$$value" >"$$2.new"
+          chown "$$3:$$3" "$$2.new"
+          chmod 0400 "$$2.new"
+          mv -f "$$2.new" "$$2"
+        }
+        secret CF_DNS_API_TOKEN /data/secrets/traefik/cf_dns_api_token 0
+        # cloudflared's image runs as nonroot, uid 65532.
+        secret TUNNEL_TOKEN /data/secrets/cloudflared/tunnel_token 65532
+        chown 65532:65532 /data/secrets/cloudflared
     volumes:
       - ${APP_DATA_DIR}/data:/data
     network_mode: none
@@ -51,7 +76,7 @@ services:
       - --entrypoints.websecure.http.tls.domains[0].sans=*.bebitwise.dev
       # Dashboard for the Umbrel app page. Reached only from umbreld's app proxy.
       - --entrypoints.dashboard.address=:8080
-      - --certificatesresolvers.cloudflare.acme.storage=/data/acme.json
+      - --certificatesresolvers.cloudflare.acme.storage=/data/acme/acme.json
       - --certificatesresolvers.cloudflare.acme.dnschallenge.provider=cloudflare
       - --certificatesresolvers.cloudflare.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53
       # Body rewrite for the Umbrel dashboard launcher (task 007), downloaded at start.
@@ -63,11 +88,14 @@ services:
       - --experimental.plugins.rewrite-body.version=v1.2.0
       - --providers.file.directory=/data/traefik/dynamic
       - --providers.file.watch=true
-    env_file:
-      - path: ${APP_DATA_DIR}/data/secrets.env
-        required: false
+    environment:
+      # lego, Traefik's ACME client, reads <VAR>_FILE when <VAR> itself is unset.
+      CF_DNS_API_TOKEN_FILE: /run/secrets/edge/cf_dns_api_token
+    # Only what Traefik needs: the certificate store, sync's routes (read-only) and its token.
     volumes:
-      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/data/acme:/data/acme
+      - ${APP_DATA_DIR}/data/traefik/dynamic:/data/traefik/dynamic:ro
+      - ${APP_DATA_DIR}/data/secrets/traefik:/run/secrets/edge:ro
     extra_hosts:
       # The host, as seen from umbrel_main_network. umbrelOS exports GATEWAY_IP to compose.
       # host-gateway would resolve to docker0, which is not directly attached here,
@@ -106,12 +134,14 @@ services:
   # so there is no config file. It reaches Traefik by name over the edge bridge.
   cloudflared:
     image: cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
-    # Exits without TUNNEL_TOKEN; Docker's backoff caps retries at one a minute until it is set.
+    # Exits without a token; Docker's backoff caps retries at one a minute until it is set.
     restart: on-failure
-    command: tunnel --no-autoupdate run
-    env_file:
-      - path: ${APP_DATA_DIR}/data/secrets.env
-        required: false
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    command: tunnel --no-autoupdate run --token-file /run/secrets/edge/tunnel_token
+    volumes:
+      - ${APP_DATA_DIR}/data/secrets/cloudflared:/run/secrets/edge:ro
     networks:
       edge: {}
 
