@@ -30,6 +30,9 @@ OUTPOST_PATH = "/outpost.goauthentik.io/"
 OUTPOST_PRIORITY = 1000
 AUTH_MIDDLEWARE = "authentik"
 OUTPOST_SERVICE = "authentik-outpost"
+# Traefik replaces only the listed response headers on the request. Any other X-authentik-*
+# header a client sends would reach the app untouched, so the whole family is replaced.
+AUTH_HEADERS_REGEX = "(?i)^x-authentik-"
 
 
 def render(state: DesiredState, domain: str) -> str:
@@ -119,6 +122,7 @@ def _add_forward_auth(
             "address": settings.address,
             "trustForwardHeader": True,
             "authResponseHeaders": list(settings.response_headers),
+            "authResponseHeadersRegex": AUTH_HEADERS_REGEX,
             # As in Authentik's Traefik template; unset, Traefik reads the response unbounded.
             "maxResponseBodySize": 4194304,
         }
