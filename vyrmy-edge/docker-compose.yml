@@ -71,6 +71,13 @@ services:
       # Strip headers whose names alias others (X_authentik_email for X-Authentik-Email),
       # so a client cannot spoof the identity headers forward auth sets (Traefik 3.7.12+).
       - --entrypoints.websecure.http.aliasHeadersStrategy=delete
+      # Refuse encoded backslashes, nulls and semicolons in paths: no app here needs them,
+      # and they can make a path look like an Authentik skip path (^/api/...) to the outpost
+      # while meaning another path to an app that decodes it. Encoded slashes and percent
+      # signs stay allowed, since real app URLs carry them (a file name containing %).
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedBackSlash=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedNullCharacter=false
+      - --entrypoints.websecure.http.encodedCharacters.allowEncodedSemicolon=false
       - --entrypoints.websecure.http.tls.certresolver=cloudflare
       - --entrypoints.websecure.http.tls.domains[0].main=bebitwise.dev
       - --entrypoints.websecure.http.tls.domains[0].sans=*.bebitwise.dev
