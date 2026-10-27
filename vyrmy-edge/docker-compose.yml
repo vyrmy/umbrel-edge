@@ -29,11 +29,31 @@ services:
         if [ -f /data/acme.json ] && [ ! -e /data/acme/acme.json ]; then
           cp -p /data/acme.json /data/acme/acme.json
         fi
-        # secret KEY FILE UID: the last KEY= line of secrets.env, trimmed and unquoted,
-        # readable by UID only. Empty when the key is missing, as an unset variable was.
+        # secret KEY FILE UID: KEY's value in secrets.env, read as Compose's env_file read it
+        # (last line wins; export prefix, spaces around =, quotes and # comments), readable by
+        # UID only. Empty when the key or the file is missing, as an unset variable was.
         secret() {
-          value=$$(sed -n "s/^$$1=//p" /data/secrets.env 2>/dev/null | tail -n 1 | tr -d '\r' |
-            sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' -e 's/^"\(.*\)"$$/\1/' -e "s/^'\(.*\)'$$/\1/")
+          value=$$(awk -v k="$$1" '
+            { sub(/\r$$/, "") }
+            {
+              line = $$0
+              sub(/^[ \t]*(export[ \t]+)?/, "", line)
+              if (index(line, k) != 1) next
+              rest = substr(line, length(k) + 1)
+              if (rest !~ /^[ \t]*=/) next
+              sub(/^[ \t]*=[ \t]*/, "", rest)
+              q = substr(rest, 1, 1)
+              if (q == "\"" || q == "\047") {
+                e = index(substr(rest, 2), q)
+                v = e ? substr(rest, 2, e - 1) : substr(rest, 2)
+              } else {
+                v = rest
+                sub(/[ \t]+#.*$$/, "", v)
+                sub(/[ \t]+$$/, "", v)
+              }
+              val = v
+            }
+            END { printf "%s", val }' /data/secrets.env 2>/dev/null || true)
           printf '%s' "$$value" >"$$2.new"
           chown "$$3:$$3" "$$2.new"
           chmod 0400 "$$2.new"
