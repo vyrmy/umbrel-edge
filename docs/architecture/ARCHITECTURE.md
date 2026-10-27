@@ -100,9 +100,12 @@ Each stage is independent. If one fails, the others still run, the error is reco
 
 - `CF_DNS_API_TOKEN`: read by Traefik for the DNS-01 challenge. Zone DNS Edit on `DOMAIN` only.
 - `CF_API_TOKEN`: read by `sync`. Zone DNS Edit on `DOMAIN`, Account Cloudflare Tunnel Edit, and Account Access Apps and Policies Edit.
-- `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `CF_TUNNEL_ID`, `TUNNEL_TOKEN`.
-- `UNIFI_API_KEY`: created under Control Plane → Integrations.
-- `UNIFI_HOST`, `UNIFI_SITE_ID`.
+- `CF_ACCOUNT_ID`, `CF_ZONE_ID`, `CF_TUNNEL_ID`: read by `sync`.
+- `TUNNEL_TOKEN`: read by `cloudflared`.
+- `UNIFI_API_KEY`: read by `sync`. Created under Control Plane → Integrations.
+- `UNIFI_HOST`, `UNIFI_SITE_ID`: read by `sync`.
+
+`sync` gets the whole file as its environment; its own token already covers what the other two keys allow. Traefik and `cloudflared` face the internet, and Traefik runs a third-party plugin, so neither sees `secrets.env` or mounts the data folder. On every start, the `init` service copies `CF_DNS_API_TOKEN` to `data/secrets/traefik/cf_dns_api_token` and `TUNNEL_TOKEN` to `data/secrets/cloudflared/tunnel_token`, each mode 0400 for that container's user, and each container mounts only its own folder (Traefik reads it as `CF_DNS_API_TOKEN_FILE`, `cloudflared` with `--token-file`). Edit `secrets.env` as before and restart the app. Traefik's other mounts are its certificate store, `data/acme/`, and `sync`'s routes, `data/traefik/dynamic/`, read-only. Edge 0.4.0 and earlier kept the store at `data/acme.json`; `init` copies it across once.
 
 Non-secret configuration lives in `${APP_DATA_DIR}/data/edge.yaml`. The dashboard itself gets a route as a built-in app with id `umbrel`, upstream port 80.
 
@@ -160,7 +163,7 @@ No database. The persistent state is:
 
 - `edge.yaml` (input, owned by you).
 - `ownership.json` (UniFi record ids, owned by `sync`). A hostname goes into `pending` just before its create request and leaves once the id is stored. A pending name whose record has the proxy IP is the only kind of unowned record `sync` ever adopts, so a lost response or a crash cannot orphan a record, and a hand-made record never becomes `sync`'s. A definite 4xx refusal clears the mark. Version 1 files still load.
-- Traefik's `acme.json`.
+- Traefik's `acme/acme.json`.
 - The remote resources in UniFi and Cloudflare.
 
 The models:
@@ -306,7 +309,7 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
 - **The sync image is pulled from GHCR anonymously.** The `umbrel-edge-sync` package must be public. A new GHCR package can start private even when its repo is public, so check after the first build.
 - **UniFi API field names** for DNS policies are taken from third-party clients. Task 003 checks them against the official docs before writing the client.
 - **Macvlan MAC and IP stability.** The compose file pins `mac_address` and `ipv4_address` on the `lan` network entry. A service-level `mac_address` lands on the first network instead (here `umbrel_main_network`), which is what happened in the first deployment. UniFi also gets a reservation, so the gateway never hands `.4` to anything else.
-- **What an app update delivers.** umbrelOS copies only `docker-compose.yml`, `*.template`, `exports.sh`, `torrc`, `hooks` and `umbrel-app.yml` into app data on an update, and offers an update only when `version` in `umbrel-app.yml` changes. Any other file in the app folder arrives only at first install, so Traefik's static configuration lives in compose `command` flags. Never uninstall and reinstall to pick up a change: uninstalling deletes app data, including `acme.json`, `edge.yaml` and `secrets.env`.
+- **What an app update delivers.** umbrelOS copies only `docker-compose.yml`, `*.template`, `exports.sh`, `torrc`, `hooks` and `umbrel-app.yml` into app data on an update, and offers an update only when `version` in `umbrel-app.yml` changes. Any other file in the app folder arrives only at first install, so Traefik's static configuration lives in compose `command` flags. Never uninstall and reinstall to pick up a change: uninstalling deletes app data, including `acme/acme.json`, `edge.yaml` and `secrets.env`.
 - **Traefik does not trust `X-Forwarded-For` from cloudflared, on purpose.** Cloudflare appends the visitor's IP to any `X-Forwarded-For` the client sent and does not let rules rewrite it, and Authentik takes the leftmost entry (`authentik/root/middleware.py`, 2025.10.2). Trusting it would let an external client choose the IP Authentik sees. Tunnelled requests therefore reach apps with cloudflared's bridge address. Brute-force protection for `auth.bebitwise.dev` comes from a Cloudflare rate-limiting rule keyed on the real client IP, plus MFA. Authentik restricts the superuser to requests without `Cf-Connecting-Ip`, which Cloudflare always sets on tunnelled requests. If per-IP data inside Authentik is ever needed, the safe route is a middleware on the auth route that replaces `X-Forwarded-For` with `Cf-Connecting-Ip` for requests from the edge bridge only.
 - **Header aliases are stripped on `websecure`.** PHP and CGI backends read `X_authentik_email` and `X-Authentik-Email` as the same variable, so a client could otherwise spoof the identity headers forward auth sets. `--entryPoints.websecure.http.aliasHeadersStrategy=delete` (Traefik 3.7.12+) removes every request header whose name has anything but letters, digits and dashes. An app that relies on an underscore header name would stop receiving it.
 - **Forward auth must reach Authentik's container directly.** Found on 7 October 2026: umbrelOS's app proxy (the Umbrel app port, 3973 for `denny-authentik`) drops `X-Forwarded-Host`, so the embedded outpost cannot tell which app a forward-auth check is for and answers 404. `forward_auth.address` and `outpost_url` therefore use `http://denny-authentik_server_1:9000` on `umbrel_main_network`. Authentik's Django API rejects Host headers containing underscores, so anything that calls Authentik's API by container name (an outpost's `authentik_host`, for example) must use `https://auth.bebitwise.dev` instead. The forward-auth endpoint is served by the Go outpost from `X-Forwarded-Host`, which is expected to accept the container name; the first protected app confirms it.
