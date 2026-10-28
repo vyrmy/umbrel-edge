@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # A personal desktop (ARCHITECTURE.md, decision 16): linuxserver's Webtop (Ubuntu, XFCE,
-# Selkies), which already ships Chromium, plus Signal Desktop, both started with the session.
+# Selkies), which already ships Chromium, plus Signal Desktop and a WhatsApp Web window, all
+# started with the session. WhatsApp has no Linux app; wrapped-whatsapp explains the window.
 # The base tag floats on purpose. The weekly build picks up linuxserver's latest Chromium and
 # Signal's latest release (each Signal build stops working about 90 days after it ships), and
 # the Umbrel apps pin the result by digest.
