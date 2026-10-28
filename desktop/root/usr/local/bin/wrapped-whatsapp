@@ -7,10 +7,12 @@
 # Chromium's singleton lock whenever no Chromium is running, so two simultaneous starts
 # can each clear it and fight over the profile. With --after-browser this waits (up to
 # 30 seconds) for the browser's singleton socket, then joins that browser as a new window.
+# The socket survives a container restart (it lives in /config and points into /tmp), so
+# it counts only once a Chromium process is running as well.
 if [ "$1" = "--after-browser" ]; then
   shift
   for _ in $(seq 1 30); do
-    [ -S "$HOME/.config/chromium/SingletonSocket" ] && break
+    [ -S "$HOME/.config/chromium/SingletonSocket" ] && pgrep -x chromium > /dev/null && break
     sleep 1
   done
 fi
