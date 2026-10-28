@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=WhatsApp
+Comment=Open WhatsApp Web with the desktop, after the browser has started
+Exec=/usr/local/bin/wrapped-whatsapp --after-browser
+Icon=internet-chat-symbolic
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

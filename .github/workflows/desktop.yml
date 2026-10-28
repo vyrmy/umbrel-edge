@@ -53,7 +53,7 @@ jobs:
           tags: |
             ghcr.io/vyrmy/umbrel-desktop:main
             ghcr.io/vyrmy/umbrel-desktop:sha-${{ github.sha }}
-      - name: Check Chromium, Signal and the wrappers are in the image
+      - name: Check Chromium, Signal, WhatsApp and the wrappers are in the image
         env:
           IMAGE: ${{ github.event_name == 'pull_request' && 'ghcr.io/vyrmy/umbrel-desktop:main' || format('ghcr.io/vyrmy/umbrel-desktop@{0}', steps.build.outputs.digest) }}
         run: |
@@ -63,11 +63,14 @@ jobs:
             test -x /opt/Signal/signal-desktop
             test -x /usr/local/bin/wrapped-signal
             test -x /usr/local/bin/wrapped-chromium
+            test -x /usr/local/bin/wrapped-whatsapp
+            grep -q "^Exec=/usr/local/bin/wrapped-whatsapp$" /usr/share/applications/whatsapp-web.desktop
+            grep -q "^Exec=/usr/local/bin/wrapped-whatsapp --after-browser$" /etc/xdg/autostart/whatsapp-web.desktop
             grep -q "^Exec=/usr/local/bin/wrapped-signal" /usr/share/applications/signal-desktop.desktop
             if grep -q -- "--no-sandbox" /usr/share/applications/signal-desktop.desktop; then
               echo "Signal menu entry still forces --no-sandbox"; exit 1
             fi
-            ls /etc/xdg/autostart/chromium-browser.desktop /etc/xdg/autostart/signal-desktop.desktop
+            ls /etc/xdg/autostart/chromium-browser.desktop /etc/xdg/autostart/signal-desktop.desktop /etc/xdg/autostart/whatsapp-web.desktop
           '
 
   pin:

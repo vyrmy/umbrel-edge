@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=WhatsApp
+Comment=WhatsApp Web in its own window
+Exec=/usr/local/bin/wrapped-whatsapp
+Icon=internet-chat-symbolic
+Categories=Network;InstantMessaging;
+Terminal=false

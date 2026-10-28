@@ -1,7 +1,7 @@
 manifestVersion: 1
 id: vyrmy-desktop-2
 name: Desktop 2
-tagline: One person's browser and Signal, kept signed in
+tagline: One person's browser, Signal and WhatsApp, kept signed in
 icon: https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/webtop-logo.png
 category: social
 # Set by scripts/pin-desktop-image to the date of the image it pins.
@@ -13,8 +13,8 @@ requiresHttps: true
 storage:
   dataRoot: data
 description: >-
-  A desktop in your browser for one person, with Chromium and Signal already
-  running. Sign in to your email, calendar, WhatsApp Web and anything else
+  A desktop in your browser for one person, with Chromium, Signal and
+  WhatsApp already running. Sign in to your email, calendar and anything else
   once, and it stays signed in wherever you open it from.
 
 
@@ -23,8 +23,9 @@ description: >-
   own address behind Authentik, and only the person it belongs to can sign in.
 
 
-  Signal needs linking once: open Signal, then scan the code with Signal on
-  your phone (Settings, Linked devices).
+  Signal and WhatsApp each need linking once: open the app's window, then
+  scan the code with the same app on your phone (Linked devices, in its
+  settings).
 developer: vyrmy
 website: https://github.com/vyrmy/umbrel-edge
 submitter: vyrmy
