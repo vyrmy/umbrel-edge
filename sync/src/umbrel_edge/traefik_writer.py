@@ -5,13 +5,20 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+from ipaddress import IPv4Network
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from umbrel_edge.discovery import DASHBOARD
-from umbrel_edge.models import DesiredState, ForwardAuthSettings, Route, StageError
+from umbrel_edge.models import (
+    DESKTOP_NETWORKS,
+    DesiredState,
+    ForwardAuthSettings,
+    Route,
+    StageError,
+)
 
 FILE_NAME = "apps.yml"
 # umbreld's app gateway is a host process, so its requests to :8080 arrive from the bridge
@@ -34,6 +41,13 @@ OUTPOST_SERVICE = "authentik-outpost"
 # Traefik replaces only the listed response headers on the request. Any other X-authentik-*
 # header a client sends would reach the app untouched, so the whole family is replaced.
 AUTH_HEADERS_REGEX = "(?i)^x-authentik-"
+NO_DESKTOPS = "no-desktops"
+# Every source but the desktop networks (decision 22). Traefik is on no IPv6 desk network,
+# so all of IPv6 is allowed.
+NOT_DESKTOPS = [
+    *(str(n) for n in sorted(IPv4Network("0.0.0.0/0").address_exclude(DESKTOP_NETWORKS))),
+    "::/0",
+]
 
 
 def render(state: DesiredState, domain: str) -> str:
@@ -99,6 +113,7 @@ def render(state: DesiredState, domain: str) -> str:
         }
     if state.forward_auth is not None:
         _add_forward_auth(state, state.forward_auth, domain, routers, services, middlewares)
+    _add_no_desktops(state, routers, middlewares)
     http: dict[str, Any] = {
         "routers": routers,
         "services": services,
@@ -153,6 +168,28 @@ def _add_forward_auth(
             "service": OUTPOST_SERVICE,
             "tls": _tls(domain),
         }
+
+
+def _add_no_desktops(
+    state: DesiredState, routers: dict[str, Any], middlewares: dict[str, Any]
+) -> None:
+    """Refuse desktop sources on every router serving a desktops-false route's hostname."""
+    denied = [r for r in state.routes if not r.desktops]
+    if not denied:
+        return
+    middlewares[NO_DESKTOPS] = {"ipAllowList": {"sourceRange": NOT_DESKTOPS}}
+    for route in denied:
+        name = _name(route)
+        serving = [name, "outpost-" + name.removeprefix("app-")]
+        if route.app_id == DASHBOARD.id:
+            serving += ["edge-assets", "edge-umbrel-fallback"]
+        for router in serving:
+            if router in routers:
+                # First, so a desktop is refused before the login or the body rewrite runs.
+                routers[router]["middlewares"] = [
+                    NO_DESKTOPS,
+                    *routers[router].get("middlewares", []),
+                ]
 
 
 def _tls(domain: str) -> dict[str, Any]:

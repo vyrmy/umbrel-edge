@@ -109,7 +109,7 @@ def test_middleware_golden(config: EdgeConfig, app_data: Path) -> None:
             k: doc["routers"][k] for k in ("app-umbrel", "edge-assets", "edge-umbrel-fallback")
         },
         "services": {"edge-sync": doc["services"]["edge-sync"]},
-        "middlewares": {"launcher-inject": doc["middlewares"]["launcher-inject"]},
+        "middlewares": {k: doc["middlewares"][k] for k in ("launcher-inject", "no-desktops")},
     }
     assert generated == yaml.safe_load(GOLDEN.read_text(encoding="utf-8"))
 
@@ -149,13 +149,14 @@ def test_server_serves_script_uncached() -> None:
 
 def test_dashboard_still_served_if_the_plugin_fails(config: EdgeConfig, app_data: Path) -> None:
     # Traefik drops a router whose middleware cannot be built. The fallback has the same rule
-    # and no middleware, and loses to app-umbrel (priority = rule length) while that works.
+    # and no plugin middleware, and loses to app-umbrel (priority = rule length) while that
+    # works. Built-in middlewares (no-desktops) cannot fail that way.
     state, _ = _state(config, app_data)
     routers = yaml.safe_load(traefik_writer.render(state, config.domain))["http"]["routers"]
     fallback = routers["edge-umbrel-fallback"]
     assert fallback["rule"] == routers["app-umbrel"]["rule"]
     assert fallback["service"] == "app-umbrel"
-    assert "middlewares" not in fallback
+    assert fallback.get("middlewares", []) == ["no-desktops"]
     assert fallback["priority"] < len(routers["app-umbrel"]["rule"])
 
 

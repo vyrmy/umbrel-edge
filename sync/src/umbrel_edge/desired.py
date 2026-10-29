@@ -62,6 +62,10 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
     else:
         external = d.external and manifest.id not in config.external_deny
     access = (d.access if policy.access is None else policy.access) and external
+    if policy.desktops is not None:
+        desktops = policy.desktops
+    else:
+        desktops = manifest.id not in config.desktop_deny
     host = policy.upstream_host or "host.docker.internal"
     port = policy.upstream_port or manifest.port
     return Route(
@@ -72,4 +76,5 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
         external=external,
         access=access,
         forward_auth=config.forward_auth_for(manifest.id),
+        desktops=desktops,
     )

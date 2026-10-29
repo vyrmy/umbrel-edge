@@ -32,6 +32,12 @@ forward_auth_deny:
   - authentik
   - denny-authentik
 
+# Never reachable from a desktop unless apps.<id>.desktops is set explicitly
+# (ARCHITECTURE.md, decision 22). The desktops still open every other app.
+desktop_deny:
+  - umbrel          # the dashboard
+  - vyrmy-edge      # Edge's own page
+
 # Ignored entirely: no route, no records.
 exclude:
   - mosquitto

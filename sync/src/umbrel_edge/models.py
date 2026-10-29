@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ipaddress import IPv4Network
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, model_validator
@@ -9,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress, model_validato
 SUBDOMAIN_RE = r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
 # Docker's own rule for container names.
 CONTAINER_RE = r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+# Every desktop slot's private network, desk-<n> = 10.31.<n>.0/24 (decision 17). Must match
+# the desk networks in Edge's compose file.
+DESKTOP_NETWORKS = IPv4Network("10.31.0.0/16")
 
 # The headers Authentik's Traefik docs pass through from the outpost to the app.
 DEFAULT_AUTH_RESPONSE_HEADERS = [
@@ -53,6 +57,8 @@ class AppPolicy(BaseModel):
     # Umbrel's login can stay on for the app's port on the Umbrel (decision 15).
     upstream_host: str | None = Field(default=None, pattern=CONTAINER_RE)
     forward_auth: bool | None = None
+    # Whether the desktops may open this app's hostname. None: not for ids in desktop_deny.
+    desktops: bool | None = None
 
     @model_validator(mode="after")
     def _upstream_host_needs_port(self) -> AppPolicy:
@@ -112,6 +118,9 @@ class EdgeConfig(BaseModel):
     ]
     # Authentik serves the login itself, so putting it behind forward auth locks everyone out.
     forward_auth_deny: list[str] = ["authentik", "denny-authentik"]
+    # Never reachable from a desktop unless apps.<id>.desktops is set (decision 22): the
+    # dashboard installs apps and opens a host terminal, and Edge's page shows the routes.
+    desktop_deny: list[str] = ["umbrel", "vyrmy-edge"]
     exclude: list[str] = ["mosquitto"]
     access: AccessSettings
     forward_auth: ForwardAuthSettings | None = None
@@ -154,6 +163,7 @@ class Route(BaseModel):
     external: bool
     access: bool
     forward_auth: bool = False
+    desktops: bool = True
 
 
 class DesiredState(BaseModel):
