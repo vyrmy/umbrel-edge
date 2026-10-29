@@ -4,7 +4,7 @@ name: Edge
 tagline: HTTPS hostnames for every app, at home and away
 icon: https://raw.githubusercontent.com/traefik/traefik/master/docs/content/assets/img/traefik.logo.png
 category: networking
-version: "0.4.2"
+version: "0.4.3"
 port: 18080
 description: >-
   Gives every app on this Umbrel its own hostname under bebitwise.dev, with a
@@ -27,11 +27,9 @@ repo: https://github.com/vyrmy/umbrel-edge
 support: https://github.com/vyrmy/umbrel-edge/issues
 gallery: []
 releaseNotes: >-
-  The Traefik dashboard now answers only Umbrel's own app page, not other apps
-  on this Umbrel. Edge can also check your UniFi gateway's certificate before
-  it sends the API key: add UNIFI_CERT_SHA256 to secrets.env with the
-  certificate's SHA-256 fingerprint, then restart Edge. The sync image now
-  installs only dependencies whose hashes are locked.
+  Edge now creates a private network for each desktop, with Traefik on it.
+  Nothing uses them yet. A later Desktop update moves each desktop onto its
+  own network, and it needs this Edge update installed first.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""
