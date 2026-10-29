@@ -1,7 +1,7 @@
 ---
 id: 011
 title: cloudflared refuses tunnel requests without a valid Access token
-status: todo
+status: in-progress
 depends_on: [009]
 ---
 
@@ -37,3 +37,19 @@ Ingress builder, ordering, withholding, drift on `aud`.
 
 ## Out of scope
 Using Authentik as Access's identity provider.
+
+## Results (29 October 2026, local)
+- Unit tests:
+  - `team_name` accepts only a bare team.
+  - Without it the ingress is unchanged. With it, access-true entries carry `{required, teamName, audTag}`, access-false entries carry nothing, and an access-true route with no known `aud` gets no entry.
+  - A changed `aud`, or a dropped check, is drift.
+  - The plan keeps the `aud` of managed apps and of an owner's own app on the same domain, and a create records the `aud` from its response.
+- Pass tests:
+  - Access apps are created before the ingress PUT, which comes before DNS, and every entry carries its new app's `aud`.
+  - An app deleted by hand whose recreation fails: the hostname leaves the ingress and its DNS record is deleted.
+  - When the Access apps cannot be read, the ingress is not touched and DNS creates nothing.
+  - A second pass with everything in place writes nothing.
+  - Without `team_name`, an Access listing failure still updates the ingress, as before (existing test).
+
+Left: the Edge release that pins this sync image, the owner's step 4, and the Acceptance checks.
+

@@ -136,8 +136,12 @@ class CloudflareClient:
     def list_access_apps(self) -> list[dict[str, Any]]:
         return self._list_all(ACCESS_STAGE, f"{self._access_path}/apps")
 
-    def create_access_app(self, body: dict[str, Any]) -> None:
-        self._call(ACCESS_STAGE, "POST", f"{self._access_path}/apps", json=body)
+    def create_access_app(self, body: dict[str, Any]) -> dict[str, Any]:
+        """The created app, whose aud the tunnel ingress needs."""
+        result = self._call(ACCESS_STAGE, "POST", f"{self._access_path}/apps", json=body).get(
+            "result"
+        )
+        return result if isinstance(result, dict) else {}
 
     def update_access_app(self, app_id: str, body: dict[str, Any]) -> None:
         self._call(ACCESS_STAGE, "PUT", f"{self._access_path}/apps/{app_id}", json=body)
@@ -209,26 +213,56 @@ def without_clashes(state: DesiredState, clashes: frozenset[str]) -> DesiredStat
 # --- Tunnel ingress -------------------------------------------------------------------------
 
 
-def build_ingress(routes: list[Route]) -> list[dict[str, Any]]:
-    """One entry per hostname in sorted order, then the mandatory catch-all."""
-    entries: list[dict[str, Any]] = [
-        {
-            "hostname": route.hostname,
-            "service": REAL_IP_SERVICE if route.real_ip else ORIGIN_SERVICE,
-            "originRequest": {"originServerName": route.hostname},
-        }
-        for route in sorted({r.hostname: r for r in routes}.values(), key=lambda r: r.hostname)
-    ]
+def build_ingress(
+    routes: list[Route], *, team_name: str | None = None, auds: Mapping[str, str] | None = None
+) -> list[dict[str, Any]]:
+    """One entry per hostname in sorted order, then the mandatory catch-all. With team_name,
+    cloudflared checks the Access token on access-true hostnames (decision 21); one whose aud
+    is unknown is left out rather than published unchecked."""
+    entries: list[dict[str, Any]] = []
+    for route in sorted({r.hostname: r for r in routes}.values(), key=lambda r: r.hostname):
+        origin: dict[str, Any] = {"originServerName": route.hostname}
+        if team_name and route.access:
+            aud = (auds or {}).get(route.hostname)
+            if not aud:
+                log.warning(
+                    "ingress entry held back: no Access aud", extra={"hostname": route.hostname}
+                )
+                continue
+            origin["access"] = {"required": True, "teamName": team_name, "audTag": [aud]}
+        entries.append(
+            {
+                "hostname": route.hostname,
+                "service": REAL_IP_SERVICE if route.real_ip else ORIGIN_SERVICE,
+                "originRequest": origin,
+            }
+        )
     return [*entries, dict(CATCH_ALL)]
 
 
-def _normalise(ingress: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
-    """The fields we set, so keys Cloudflare adds (such as an empty originRequest) are not drift."""
-    out: list[tuple[str, str, str]] = []
+def _normalise(ingress: list[dict[str, Any]]) -> list[tuple[str, str, str, str]]:
+    """The fields we set, so keys Cloudflare adds (such as an empty originRequest) are not drift.
+    The Access check counts, so a changed aud or a dropped check is rewritten."""
+    out: list[tuple[str, str, str, str]] = []
     for entry in ingress:
         origin = entry.get("originRequest")
-        sni = origin.get("originServerName", "") if isinstance(origin, dict) else ""
-        out.append((str(entry.get("hostname", "")), str(entry.get("service", "")), str(sni)))
+        origin = origin if isinstance(origin, dict) else {}
+        access = origin.get("access")
+        check = (
+            json.dumps(
+                {k: access.get(k) for k in ("required", "teamName", "audTag")}, sort_keys=True
+            )
+            if isinstance(access, dict)
+            else ""
+        )
+        out.append(
+            (
+                str(entry.get("hostname", "")),
+                str(entry.get("service", "")),
+                str(origin.get("originServerName", "")),
+                check,
+            )
+        )
     return out
 
 
@@ -246,8 +280,14 @@ class TunnelPlan:
         return "\n".join(lines) or "cloudflare_tunnel: no changes"
 
 
-def plan_tunnel(routes: list[Route], current: list[dict[str, Any]]) -> TunnelPlan:
-    ingress = build_ingress(routes)
+def plan_tunnel(
+    routes: list[Route],
+    current: list[dict[str, Any]],
+    *,
+    team_name: str | None = None,
+    auds: Mapping[str, str] | None = None,
+) -> TunnelPlan:
+    ingress = build_ingress(routes, team_name=team_name, auds=auds)
     have = {e.get("hostname") for e in current if e.get("hostname")}
     want = {e["hostname"] for e in ingress if "hostname" in e}
     return TunnelPlan(
@@ -259,10 +299,18 @@ def plan_tunnel(routes: list[Route], current: list[dict[str, Any]]) -> TunnelPla
 
 
 def reconcile_tunnel(
-    client: CloudflareClient, state: DesiredState, *, dry_run: bool = False
+    client: CloudflareClient,
+    state: DesiredState,
+    *,
+    dry_run: bool = False,
+    team_name: str | None = None,
+    auds: Mapping[str, str] | None = None,
+    withheld: frozenset[str] = frozenset(),
 ) -> TunnelPlan:
-    routes = external_routes(state)
-    result = plan_tunnel(routes, client.get_ingress())
+    """`withheld` hostnames (no usable Access app yet) get no ingress entry."""
+    held = {h.lower() for h in withheld}
+    routes = [r for r in external_routes(state) if r.hostname.lower() not in held]
+    result = plan_tunnel(routes, client.get_ingress(), team_name=team_name, auds=auds)
     if result.changed and not dry_run:
         client.put_ingress(result.ingress)
         log.info("tunnel ingress updated", extra={"hostnames": len(routes)})
@@ -451,12 +499,17 @@ class AccessPlan:
     conflicts: list[str] = field(default_factory=list)
     extra_policies: list[str] = field(default_factory=list)  # duplicate managed policy ids
     created: list[str] = field(default_factory=list)  # creates that succeeded in this pass
+    aud: dict[str, str] = field(default_factory=dict)  # hostname -> its Access app's aud
 
     @property
     def missing(self) -> frozenset[str]:
         """Hostnames with no usable Access app yet: DNS must wait for these. An app created
         earlier in a pass that then failed protects its name, so it is no longer missing."""
         return frozenset(self.create) - frozenset(self.created)
+
+    def without_aud(self, want: list[str]) -> frozenset[str]:
+        """Hostnames in want whose Access app's aud is not known."""
+        return frozenset(h for h in want if not self.aud.get(h))
 
     def describe(self) -> str:
         sign = {"create": "+", "update": "~", "delete": "-"}.get(self.policy_action)
@@ -493,20 +546,25 @@ def plan_access(
     by_name: dict[str, list[dict[str, Any]]] = {}
     for app in apps:
         by_name.setdefault(str(app.get("name", "")), []).append(app)
-    unmanaged_domains = {
-        str(a.get("domain", "")).lower()
+    unmanaged = {
+        str(a.get("domain", "")).lower(): a
         for a in apps
         if not str(a.get("name", "")).startswith(ACCESS_PREFIX)
     }
     for hostname in want:
         same = by_name.get(f"{ACCESS_PREFIX}{hostname}", [])
         if not same:
-            if hostname.lower() in unmanaged_domains:
+            if hostname.lower() in unmanaged:
                 plan.conflicts.append(hostname)
+                # The owner's own app protects the name, so cloudflared checks its tokens.
+                if aud := unmanaged[hostname.lower()].get("aud"):
+                    plan.aud[hostname] = str(aud)
             else:
                 plan.create.append(hostname)
             continue
         first, *rest = same
+        if aud := first.get("aud"):
+            plan.aud[hostname] = str(aud)
         stale = (
             first.get("domain") != hostname
             or first.get("type") != "self_hosted"
@@ -560,8 +618,12 @@ def apply_access_changes(client: CloudflareClient, plan: AccessPlan) -> None:
     if plan.policy_id is None:
         raise StageError(ACCESS_STAGE, "no allow policy to attach apps to")
     for hostname in plan.create:
-        client.create_access_app(_app_body(hostname, plan.session_duration, plan.policy_id))
+        created = client.create_access_app(
+            _app_body(hostname, plan.session_duration, plan.policy_id)
+        )
         plan.created.append(hostname)
+        if aud := created.get("aud"):
+            plan.aud[hostname] = str(aud)
         log.info("access app created", extra={"hostname": hostname})
     for hostname, app_id in plan.update.items():
         client.update_access_app(app_id, _app_body(hostname, plan.session_duration, plan.policy_id))

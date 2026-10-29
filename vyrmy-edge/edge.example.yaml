@@ -46,6 +46,10 @@ access:
   allowed_emails:
     - you@example.com
   session_duration: 24h
+  # Your Zero Trust team, the <team> in <team>.cloudflareaccess.com. Set, cloudflared itself
+  # refuses requests without a valid Access token, so a deleted or edited Access app no
+  # longer leaves its hostname open (ARCHITECTURE.md, decision 21).
+  # team_name: your-team
 
 # Authentik forward auth (ARCHITECTURE.md, decision 14). Needed once any app sets
 # forward_auth: true. In Authentik, give each protected app a Proxy provider in
