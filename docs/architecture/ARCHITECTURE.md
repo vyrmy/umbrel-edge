@@ -16,6 +16,8 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 - High availability. One proxy, one tunnel connector. If the Dell is down, the apps are down anyway.
 - A web UI for the sync service. Configuration is one YAML file.
 - Managing Tailscale, WireGuard or the UniFi firewall beyond the rules listed in task 001.
+- Voice and video calls from the desktops. Messaging works through the egress proxy; calls stay on phones (decision 18).
+- Reaching anything from a desktop that is not an Umbrel app with a hostname: other LAN devices, app ports by IP, other containers.
 
 ## Decisions
 
@@ -35,6 +37,13 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 14. **Apps with no login of their own can sit behind Authentik forward auth, per app.** `apps.<id>.forward_auth: true` adds Traefik's `forwardAuth` middleware, pointed at Authentik's embedded outpost, to that app's router, so the same login applies at home and through the tunnel. Each protected hostname also gets a router for `/outpost.goauthentik.io/` to the outpost, above the app router, which is how Authentik's [Traefik integration](https://docs.goauthentik.io/add-secure-apps/providers/proxy/server_traefik/) finishes the login in single application mode; in domain level mode the same router is harmless. Off by default, because Umbrel app auth has to be turned off for every app that uses it ([umbrel#2242](https://github.com/getumbrel/umbrel/issues/2242)). Rejected: forward auth on the internal path only, which treats home and away differently for no gain.
 15. **An app's hostname can go straight to its container, past umbreld's app gateway.** `apps.<id>.upstream_host` names a container on `umbrel_main_network` (every app's default network) and `upstream_port` its own port, so Traefik calls `http://<container>:<port>` instead of `host.docker.internal:<Umbrel port>`. The gateway, and with it Umbrel's login, is then off the hostname path only. Umbrel's login stays on for `192.168.10.2:<port>`, where umbrelOS 2.0 lets in only the users the app is shared with, while the hostname gets Authentik. That removes the umbrel#2242 trade-off for apps that hold one person's data. Forward auth defaults to on for such a route, since nothing else would guard it, unless the app is in `forward_auth_deny` or sets `forward_auth: false`. The launcher keeps mapping the manifest port, which is what the dashboard links to. Rejected: turning Umbrel's login off and waiting for the firewall to close app ports, which leaves the port open to every LAN device until then.
 16. **Each person gets their own desktop app, `vyrmy-desktop-<n>`, with a browser and Signal that stay signed in.** umbrelOS 2.0 shares one copy of an app, with one set of data, among every user it is shared with, and its gateway tells the app nothing about who is signed in (`app-gateway.ts`), so a per-person browser needs one app per person. The slots are numbered (Desktop 1, Desktop 2), so no names go into this public repo; names live in the owner's `edge.yaml` and Umbrel's sharing. Each slot runs `ghcr.io/vyrmy/umbrel-desktop`: linuxserver's Webtop (Ubuntu, XFCE, Selkies streaming) with its Chromium, plus Signal Desktop from Signal's apt repository and WhatsApp Web in its own Chromium app window, all started with the session. WhatsApp has no Linux app, so the window is `chromium --app=https://web.whatsapp.com/` on the same profile as the browser, which keeps it linked; at login it waits for the browser's singleton socket before joining it, because Webtop's `wrapped-chromium` clears the singleton lock whenever no Chromium is running. Rejected: unofficial WhatsApp wrappers (WasIstLos, ZapZap), each a third-party binary with every message. `scripts/new-desktop-slot <n>` adds a slot. The image is rebuilt every Monday and `scripts/pin-desktop-image` commits the new digest and a date version, because Signal Desktop stops working about 90 days after each release and Chromium needs its patches. The hostname uses decision 15, Cloudflare Access outside and an Authentik application bound to the one person. Rejected: Thunderbird alone (the first request), which covers mail but not calendars, WhatsApp Web or Signal; one shared app routing on the `X-authentik-username` header, which anyone on the LAN could forge at the Umbrel port; and spawning containers per user through the Docker socket, which puts host root inside an internet-facing app.
+
+17. **Each desktop is a client on its own private network, with Traefik as its only way into the Umbrel.** Edge defines one network per slot, `desk-<n>` (Docker name `vyrmy-edge_desk-<n>`, subnet `10.31.<n>.0/24`), with `internal: true` and `com.docker.network.bridge.inhibit_ipv4: "true"`, and attaches Traefik to each at `10.31.<n>.2`. Slot `n` puts its desktop container on that network alone, at `10.31.<n>.10`, beside its own egress proxy (decision 18). A plain internal network is not enough: on Docker 29.9 the host could still reach the desktop, and the desktop could reach any host service on the bridge's gateway address; with no host address on the bridge, both stop. One network per slot, because on a shared one each desktop could reach the others' port 3000. Edge owns the networks so that Traefik never depends on a desktop being installed, and each desktop's manifest lists `dependencies: [vyrmy-edge]`, which stops umbreld uninstalling Edge underneath it (it orders nothing else). umbreld's app gateway can no longer reach the desktop, so the slot's Umbrel port serves a placeholder page behind Umbrel's login, and the desktop itself opens only at its hostname; this replaces decision 15's note about Umbrel's login on `192.168.10.2:<port>` for the desktops. Rejected: a plain internal network (the host holes above); one network for every desktop; networks owned by the desktop apps (Traefik would fail to start whenever one is missing); spawning containers per user through the Docker socket (decision 16).
+18. **A desktop reaches the internet only through its own Squid, which refuses private destinations.** Each slot runs `egress`, `ubuntu/squid` pinned by digest, as uid 13 with a read-only root, no capabilities and its configuration inline in `command`, on `desk-<n>` at `10.31.<n>.3` and on the slot's own normal bridge. Squid checks the address it actually connects to, so a public name that resolves to a private address, a mixed answer, an IP literal in decimal or octal form and every IPv6 literal are refused (64 of 64 escape attempts refused in a local test). Ports 80, 443 and 1025 to 65535 are allowed, and only refusals are logged, because the desktop is one person's browsing. In the image, `/etc/chromium.d/90-egress` gives every Chromium launch, the WhatsApp window included, `--proxy-server`, a bypass list for `DOMAIN` and `*.DOMAIN`, and a `--host-resolver-rules` mapping those names to Traefik's address; a managed policy locks the proxy setting. Signal reads only `HTTPS_PROXY`, which `wrapped-signal` sets. Both addresses are IP literals, so the desktop does no DNS of its own. Calls do not connect: Signal's RingRTC has no proxy support and needs UDP, and WhatsApp's are expected to behave the same. Rejected: tinyproxy (it filters the host string, so a public name resolving to `10.x` got through); a routing container with NAT (calls would work, but it needs `NET_ADMIN` in both the desktop and the router and a hand-set default route; revisit if calls matter).
+19. **Traefik serves the tunnel on its own entrypoints and places each route by its flags.** `websecure` (`:443`) keeps serving the LAN, the VPN, the `umbrel_main_network` aliases and the desktops. `tunnel` (`10.30.0.2:8443`) serves cloudflared, on a fixed `edge` subnet `10.30.0.0/24`. A route with `internal` true is on `websecure`, one with `external` true on `tunnel`, and the `outpost-*`, `edge-assets` and `edge-umbrel-fallback` routers copy the list of the route they serve. `internal: false` therefore means the LAN gets 404, and a stray ingress entry or DNS record cannot reach a home-only app. The hardening flags (`aliasHeadersStrategy`, `encodedCharacters`) are per entrypoint and are repeated on every one. Rejected: one entrypoint for everything (the tunnel's hostname list was the only control).
+20. **Home Assistant alone sees each visitor's real address, through a second, trusting tunnel entrypoint.** `apps.<id>.real_ip: true` puts an external route on `tunnel-realip` (`10.30.0.2:8444`), which trusts forwarded headers from the `edge` subnet and does not append its own, so `X-Forwarded-For` ends with the address Cloudflare appended. A middleware on that route pins `X-Forwarded-Host` and `X-Forwarded-Proto` and drops `X-Forwarded-Uri`, `X-Forwarded-Method`, `X-Forwarded-Port` and `X-Real-Ip`, which a trusting entrypoint would otherwise pass on from the client. Home Assistant walks `X-Forwarded-For` from the right past its trusted proxies, so it gets Cloudflare's entry: local-only webhooks and users stop working from the internet, and a forged header changes nothing. `real_ip` is refused with forward auth, because a client's `X-Forwarded-Uri` would reach Authentik's skip rules. Rejected: trusting forwarded headers on `tunnel` itself (Authentik records the leftmost entry, which the client chooses, and forward auth would see client values); stripping middleware on every other route (one missing middleware reopens the bypass).
+21. **cloudflared checks the Access token for every route with `access` true.** With `access.team_name` set, each such ingress rule carries `originRequest.access` with `required: true`, the team name and that hostname's Access app `aud`. A request with no token, a wrong audience or an invalid token is refused by cloudflared, so a deleted or edited Access app no longer leaves its hostname open. Access apps are now created and updated before the tunnel ingress is written, since the ingress needs their `aud`, and a hostname whose app is missing gets no ingress entry and no DNS record. Rejected: checking the token in Traefik (a JWT plugin would run inside the process that holds the certificate token).
+22. **Desktops cannot open the Umbrel dashboard or Edge's own page.** Routes for ids in `desktop_deny` (`umbrel` and `vyrmy-edge` by default, overridable with `apps.<id>.desktops`) get a `no-desktops` middleware, an IP allowlist of every IPv4 range except `10.31.0.0/16`, plus all of IPv6. The dashboard installs apps and opens a terminal on the host, and a desktop's browser is the most exposed program in the house. Rejected: a separate Traefik entrypoint for desktops (Chromium can map a name to an address but not to another port, and `websecure` already holds `:443` on every interface).
 
 ## Stack
 
@@ -80,12 +89,14 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 - Traefik listens on `192.168.10.4:80` (redirect to HTTPS) and `:443`. That address is on the Servers network, outside the DHCP pool (`.6` to `.254`), with a UniFi reservation for the fixed macvlan MAC.
 - Firewall additions: Main → `192.168.10.4` TCP 80/443, and VPN → `192.168.10.4` TCP 80/443. IoT gets nothing.
 - `cloudflared` makes outbound connections only. The Servers zone already allows internet access.
+- Traefik's other networks: `edge` (`10.30.0.0/24`, Traefik at `10.30.0.2`, shared with cloudflared and sync) and one `desk-<n>` per desktop (`10.31.<n>.0/24`, internal, no host address; Traefik `.2`, the slot's egress proxy `.3`, the desktop `.10`). Entrypoints: `websecure` `:443` on every interface, `tunnel` `10.30.0.2:8443`, `tunnel-realip` `10.30.0.2:8444`, `dashboard` `:8080` (decisions 19 and 20).
 - Traefik reaches apps at `host.docker.internal:<port>`, which is `10.21.0.1` on `umbrel_main_network`. Home Assistant runs in host network mode on port 8123 and is reached the same way. Apps therefore see Traefik's requests coming from `10.21.0.5`.
 
 **Request paths.**
 
 - *At home:* the client asks the UCG for `jellyfin.DOMAIN`, gets the local A record `192.168.10.4`, connects over TLS with the wildcard certificate, and Traefik proxies to `host.docker.internal:<jellyfin port>`.
-- *Away:* public DNS returns a CNAME to `<tunnel-id>.cfargotunnel.com`. Cloudflare Access challenges the visitor. The tunnel delivers the request to `cloudflared`, which calls `https://traefik:443` with `originServerName: jellyfin.DOMAIN`. Traefik then proxies it exactly as it does at home.
+- *Away:* public DNS returns a CNAME to `<tunnel-id>.cfargotunnel.com`. Cloudflare Access challenges the visitor. The tunnel delivers the request to `cloudflared`, which checks the Access token (decision 21) and calls `https://traefik:8443` (`:8444` for a `real_ip` route) with `originServerName: jellyfin.DOMAIN`. Traefik then proxies it as it does at home, if the route is external.
+- *From a desktop:* Chromium maps `*.DOMAIN` to Traefik's address on the desktop's own network and connects there directly, so the request takes the home path (`websecure`, no Access) and meets the same logins as at home. Every other name goes to the slot's Squid, which resolves it and refuses private destinations.
 
 **Background work.** `sync` runs a reconcile loop every 60 seconds, and immediately when `edge.yaml` changes. Each pass has four stages:
 
@@ -148,8 +159,9 @@ umbrel-edge/                         # GitHub repo, added to Umbrel as a communi
 │   └── tests/                       # pytest; respx fakes for both APIs
 ├── vyrmy-desktop-<n>/               # one personal desktop per person (decision 16)
 │   ├── umbrel-app.yml               # id vyrmy-desktop-<n>, port 18100 + n, version = image date
-│   └── docker-compose.yml           # one service, desktop, pinned to the umbrel-desktop image
-├── desktop/                         # the umbrel-desktop image: Webtop + Signal, autostart files
+│   └── docker-compose.yml           # desktop (on vyrmy-edge_desk-<n> only), egress (Squid), placeholder
+├── desktop/                         # the umbrel-desktop image: Webtop + Signal, autostart files,
+│                                    #   /etc/chromium.d/90-egress, the egress policy init script
 ├── scripts/
 │   ├── new-desktop-slot             # copies Desktop 1 to Desktop <n>
 │   └── pin-desktop-image            # sets every slot's image digest and version (run by CI)
@@ -193,6 +205,8 @@ class AppPolicy(BaseModel):
     upstream_scheme: Literal["http", "https"] = "http"
     upstream_host: str | None = None    # container on umbrel_main_network (decision 15); needs upstream_port
     forward_auth: bool | None = None
+    real_ip: bool = False               # tunnel-realip (decision 20); needs external, refuses forward auth
+    desktops: bool | None = None        # None: false for ids in desktop_deny (decision 22)
 
 class Defaults(BaseModel):
     internal: bool = True
@@ -209,6 +223,7 @@ class ForwardAuthSettings(BaseModel):
 class AccessSettings(BaseModel):
     allowed_emails: list[str] = Field(min_length=1)
     session_duration: str = "24h"
+    team_name: str | None = Field(default=None, pattern=r"^[a-z0-9-]+$")   # decision 21
 
 class EdgeConfig(BaseModel):
     """The whole of edge.yaml."""
@@ -222,6 +237,7 @@ class EdgeConfig(BaseModel):
     ]
     forward_auth_deny: list[str] = ["authentik", "denny-authentik"]   # never behind forward auth by default
     exclude: list[str] = ["mosquitto"]   # apps to ignore entirely (no web UI)
+    desktop_deny: list[str] = ["umbrel", "vyrmy-edge"]   # never reachable from a desktop by default
     access: AccessSettings
     forward_auth: ForwardAuthSettings | None = None
     apps: dict[str, AppPolicy] = {}
@@ -235,6 +251,8 @@ class Route(BaseModel):
     external: bool
     access: bool
     forward_auth: bool = False
+    real_ip: bool = False
+    desktops: bool = True
 
 class DesiredState(BaseModel):
     routes: list[Route]                  # sorted by hostname, unique hostnames
@@ -255,6 +273,8 @@ Rules applied in `desired.py`:
 - Hostname collisions are a validation error, not a silent overwrite.
 - The upstream is `<scheme>://host.docker.internal:<upstream_port or manifest port>`, or `<scheme>://<upstream_host>:<upstream_port>` when `upstream_host` is set. `upstream_host` without `upstream_port` is a validation error, because the manifest port belongs to umbreld's gateway, not the container.
 - `forward_auth` defaults to `defaults.forward_auth` (false), or to true when `upstream_host` is set, and is forced false for ids in `forward_auth_deny` unless `apps.<id>.forward_auth` is set explicitly. The built-in list holds `authentik` and `denny-authentik` (the community store id installed on this Umbrel): Authentik serves the login flow, so protecting its own hostname denies or loops every login and locks out every protected app. If any app, or the default, turns it on and there is no top-level `forward_auth` block, the config is rejected with a message naming those apps. `build` checks again, so a protected route is never published without its login.
+- `real_ip: true` is rejected on a route that is not external, and on one with forward auth on.
+- `desktops` is false for ids in `desktop_deny` unless `apps.<id>.desktops` is set explicitly. `DESKTOP_NETWORKS` is `10.31.0.0/16` in `models.py` and must match the `desk-<n>` subnets in Edge's compose.
 
 ## Contracts
 
@@ -271,7 +291,16 @@ Rules applied in `desired.py`:
 - `200` `{"status": "ok", "last_success": "<ISO 8601>", "routes": <int>}` when the last pass succeeded within 5 minutes.
 - `503` `{"status": "degraded", "last_success": "<ISO 8601 | null>", "errors": [{"stage": "config|traefik|unifi|cloudflare_tunnel|cloudflare_dns|cloudflare_access|loop", "message": "<str>"}]}` otherwise.
 
-**Traefik dynamic file** (`/data/traefik/dynamic/apps.yml`, written by `sync`, read by Traefik's file provider). One router per route: rule ``Host(`<hostname>`)``, entrypoint `websecure`, TLS with certResolver `cloudflare` and domain `*.DOMAIN`. One service per route, with loadBalancer server `<upstream>` and passHostHeader true. Only routes with `internal` or `external` true are written.
+**Traefik dynamic file** (`/data/traefik/dynamic/apps.yml`, written by `sync`, read by Traefik's file provider). One router per route: rule ``Host(`<hostname>`)``, entrypoints `websecure` if internal, then `tunnel` if external (`tunnel-realip` instead when `real_ip`), TLS with certResolver `cloudflare` and domain `*.DOMAIN`. One service per route, with loadBalancer server `<upstream>` and passHostHeader true. Only routes with `internal` or `external` true are written. Companion routers (`outpost-*`, `edge-assets`, `edge-umbrel-fallback`) use the entrypoints of the route they serve. A `real_ip` route lists middleware `realip-<id>` (`headers.customRequestHeaders`: `X-Forwarded-Host: <hostname>`, `X-Forwarded-Proto: https`, and empty `X-Forwarded-Uri`, `X-Forwarded-Method`, `X-Forwarded-Port`, `X-Real-Ip`). A route with `desktops` false lists `no-desktops` first (`ipAllowList.sourceRange`: `0.0.0.0/0` minus `10.31.0.0/16` as CIDRs, plus `::/0`).
+
+**Traefik static flags** added for decisions 19 and 20, each new entrypoint also getting `http.aliasHeadersStrategy=delete` and the three `http.encodedCharacters.allowEncoded*=false` flags `websecure` has:
+
+```
+--entrypoints.tunnel.address=10.30.0.2:8443
+--entrypoints.tunnel-realip.address=10.30.0.2:8444
+--entrypoints.tunnel-realip.forwardedHeaders.trustedIPs=10.30.0.0/24
+--entrypoints.tunnel-realip.forwardedHeaders.notAppendXForwardedFor=true
+```
 
 Forward auth (decision 14), written only when at least one route has `forward_auth` true:
 
@@ -292,9 +321,47 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
 
 **Cloudflare API** (base `https://api.cloudflare.com/client/v4`, bearer `CF_API_TOKEN`):
 
-- Tunnel ingress: `PUT /accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations` with `config.ingress`. There is one entry per external route: `{"hostname": "<h>", "service": "https://traefik:443", "originRequest": {"originServerName": "<h>"}}`. The list ends with `{"service": "http_status:404"}`. The whole list is replaced on each change, so this tunnel must not be edited by hand.
+- Tunnel ingress: `PUT /accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations` with `config.ingress`. There is one entry per external route: `{"hostname": "<h>", "service": "https://traefik:8443", "originRequest": {"originServerName": "<h>"}}`, with `:8444` for a `real_ip` route and, when `access.team_name` is set and the route has `access` true, `"access": {"required": true, "teamName": "<team>", "audTag": ["<aud>"]}` inside `originRequest`. The list ends with `{"service": "http_status:404"}`. The whole list is replaced on each change, so this tunnel must not be edited by hand.
 - DNS: `GET/POST/PATCH/DELETE /zones/{zone_id}/dns_records`. Each record is a CNAME `<h>` → `<tunnel_id>.cfargotunnel.com`, proxied, with comment `managed-by=umbrel-edge`. Records without that comment are never touched.
-- Access: apps via `GET/POST/PUT/DELETE /accounts/{account_id}/access/apps`, policies via the same verbs on `/accounts/{account_id}/access/policies`. There is one reusable allow policy, named `umbrel-edge:allowed-emails`, with one `include` rule per address in `access.allowed_emails`. Each app is named `umbrel-edge:<h>`, type `self_hosted`, domain `<h>`, session duration from config, and references that policy as `"policies": [{"id": "<policy id>", "precedence": 1}]`. Cloudflare now recommends reusable policies and does not allow app-scoped ones on new apps, so the policy is not inlined. Order within a pass: tunnel ingress, Access create and update, DNS, Access delete. A name is therefore never public without its Access app, and if the Access stage fails, new access-true names are not published.
+- Access: apps via `GET/POST/PUT/DELETE /accounts/{account_id}/access/apps`, policies via the same verbs on `/accounts/{account_id}/access/policies`. There is one reusable allow policy, named `umbrel-edge:allowed-emails`, with one `include` rule per address in `access.allowed_emails`. Each app is named `umbrel-edge:<h>`, type `self_hosted`, domain `<h>`, session duration from config, and references that policy as `"policies": [{"id": "<policy id>", "precedence": 1}]`. Cloudflare now recommends reusable policies and does not allow app-scoped ones on new apps, so the policy is not inlined. Order within a pass: Access create and update, tunnel ingress, DNS, Access delete. A name is therefore never public without its Access app, and if the Access stage fails, new access-true names get neither an ingress entry nor DNS.
+
+**Desktop slot** (`vyrmy-desktop-<n>/docker-compose.yml`, decisions 17 and 18):
+
+- `desktop`: on `desk` only, at `10.31.<n>.10`. Environment adds `EGRESS_PROXY: http://10.31.<n>.3:3128`, `EGRESS_DIRECT_DOMAIN: bebitwise.dev`, `EGRESS_DIRECT_HOST: 10.31.<n>.2` and `SELKIES_ENABLE_DUAL_MODE: "false|locked"`.
+- `egress`: `ubuntu/squid` pinned by digest, `user: "13:13"`, `read_only: true`, `tmpfs: [/tmp]`, `cap_drop: [ALL]`, `no-new-privileges`, on `desk` at `10.31.<n>.3` and on `egress`. Its `command` writes this configuration and runs `squid -N`:
+
+  ```
+  http_port 3128
+  visible_hostname egress
+  pid_filename none
+  pinger_enable off
+  coredump_dir /tmp
+  cache deny all
+  cache_mem 0 MB
+  cache_log /dev/stderr
+  cache_store_log none
+  via off
+  forwarded_for delete
+  shutdown_lifetime 1 seconds
+  acl clients src 10.31.<n>.10/32
+  acl never_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/3
+  acl never_dst6 dst ::/128 ::1/128 ::ffff:0:0/96 64:ff9b::/96 64:ff9b:1::/48 100::/64 2001::/32 2001:db8::/32 2002::/16 fc00::/7 fe80::/10 fec0::/10 ff00::/8
+  acl v6_literal dstdom_regex :
+  acl ok_ports port 80 443 1025-65535
+  acl refused http_status 403
+  access_log stdio:/dev/stdout refused
+  http_access deny !clients
+  http_access deny !ok_ports
+  http_access deny never_dst
+  http_access deny never_dst6
+  http_access deny v6_literal
+  http_access allow all
+  ```
+
+  `v6_literal` is there because Squid in a container without IPv6 drops the `never_dst6` lines as empty ACLs, which would leave IPv6 literals unrefused.
+- `placeholder`: a pinned `nginx:alpine-slim` on `default`, serving one page saying the desktop opens at its own address. `app_proxy` points at it, so Umbrel's login still guards the slot's port.
+- Networks: `desk: {external: true, name: vyrmy-edge_desk-<n>}`, `egress: {driver: bridge}`.
+- Manifest: `dependencies: [vyrmy-edge]`.
 
 **Error shape inside `sync`.** Every client raises `StageError(stage: str, message: str, retriable: bool)`. `loop.py` catches it per stage and records it for `/healthz`. HTTP 429 and 5xx responses are retriable with exponential backoff (3 attempts). 4xx responses are not. A POST is never repeated once it may have reached the server (a timeout after sending, or a 5xx), because a repeat could create the resource twice; the next pass re-plans instead.
 
@@ -322,4 +389,9 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
 - **A desktop holds every session its person signs in to.** Whoever gets past its Authentik application (hostname) or Umbrel's login (port) has their email, WhatsApp and Signal. So each desktop's Authentik application is bound to one user and needs MFA, and the Umbrel app is shared with that person only. The owner can still open every desktop at its port, as the umbrelOS owner can open every app. Each slot's compose file turns off Selkies' command messages, file transfers, shared and extra-player sessions, and cross-site websocket origins, none of which a one-person desktop needs. Browser data is stored unencrypted in the app's data folder (Chromium uses `--password-store=basic` in Webtop), which `sync` can read through its `/umbrel` mount (see "Discovery sees the whole Umbrel data directory").
 - **Chromium and Signal run with `--no-sandbox` on the desktops.** The first release set `seccomp=unconfined` so their own per-process sandboxes could work, but on 24 October 2026 both crashed at start on the Umbrel with `sandbox/linux/services/credentials.cc:131 ... Permission denied`: the kernel refuses the unprivileged user namespaces those sandboxes need. Docker's seccomp filter is back on, so Webtop's `wrapped-chromium` and `wrapped-signal` fall back to `--no-sandbox`, as Umbrel's own Chromium app does. A page that exploits the browser then runs as the desktop's `abc` user with that person's sessions, with no root (sudo is disabled) and Docker's default confinement around it. Chromium's weekly rebuild is the main defence. Getting the sandboxes back would mean allowing unprivileged user namespaces on the host, which is a host change outside this app.
 - **A desktop's stream goes through Cloudflare's tunnel.** Selkies sends the screen as video over a websocket. Cloudflare's terms restrict serving video on the free plan; a household remote desktop is small next to what that clause targets, but if Cloudflare objects, the fallback is the WireGuard VPN, where the same hostname resolves to `192.168.10.4`.
+- **Edge must be updated before the desktops that need its networks (decisions 17 and 18).** A desktop whose `vyrmy-edge_desk-<n>` network does not exist fails to start; umbreld retries three times, then shows the app as stopped until it is opened again. Docker keeps the networks across reboots and app restarts, so this bites only on the first rollout, after Edge is reinstalled, or after `docker network prune`. Release notes for the desktop slots say to update Edge first.
+- **A shipped `desk-<n>` definition is frozen.** Compose cannot recreate a network a running container is attached to, so changing a `desk-<n>` subnet or option makes Edge's next start fail until every desktop is stopped. Adding a new `desk-<n>` is fine.
+- **The new subnets must not clash with home networks.** `10.30.0.0/24` and `10.31.0.0/16` become routes on the Umbrel. If a VLAN, the VPN or Tailscale uses either range, pick other ones before task 009 and 012 ship (the audit script's host addresses section shows the routes).
+- **Docker on the Umbrel is 28.5; the network tests ran on 29.9.** `inhibit_ipv4`, the embedded DNS refusing external names on internal networks, and the isolation results are re-checked on the Umbrel in task 012's and 014's acceptance.
+- **Squid is pinned by digest and nothing updates it.** Refresh it by hand with the desktop releases until the weekly workflow does.
 - **Home Assistant is public too, without Access (24 October 2026).** This overrides decision 9's VPN-only stance for one reason: the claude.ai connector to Home Assistant's MCP server (`/api/mcp`) connects from Anthropic's servers and signs in with Home Assistant's own OAuth, which neither Access nor forward auth can sit in front of. The companion app then works away from home without the VPN as well. Home Assistant's login is the only gate, so every Home Assistant user needs MFA, and the Cloudflare rate-limiting rule also counts `/auth/login_flow`. Home Assistant's own IP ban is no help here and must stay off (`login_attempts_threshold` unset): umbreld's gateway replaces `X-Forwarded-For` with Traefik's address (`app-gateway.ts`), so every visitor, at home or away, reaches Home Assistant from one IP and a ban would lock everyone out.
