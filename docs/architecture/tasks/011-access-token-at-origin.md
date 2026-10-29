@@ -1,7 +1,7 @@
 ---
 id: 011
 title: cloudflared refuses tunnel requests without a valid Access token
-status: in-progress
+status: done
 depends_on: [009]
 ---
 
@@ -51,5 +51,5 @@ Using Authentik as Access's identity provider.
   - A second pass with everything in place writes nothing.
   - Without `team_name`, an Access listing failure still updates the ingress, as before (existing test).
 
-Left: the Edge release that pins this sync image, the owner's step 4, and the Acceptance checks.
+Released in Edge 0.5.1, which pins `umbrel-edge-sync:sha-c7ec3d3`. Left: the owner's step 4 and the Acceptance checks.
 

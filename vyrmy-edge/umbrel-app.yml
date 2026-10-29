@@ -4,7 +4,7 @@ name: Edge
 tagline: HTTPS hostnames for every app, at home and away
 icon: https://raw.githubusercontent.com/traefik/traefik/master/docs/content/assets/img/traefik.logo.png
 category: networking
-version: "0.5.0"
+version: "0.5.1"
 port: 18080
 description: >-
   Gives every app on this Umbrel its own hostname under bebitwise.dev, with a
@@ -27,17 +27,19 @@ repo: https://github.com/vyrmy/umbrel-edge
 support: https://github.com/vyrmy/umbrel-edge/issues
 gallery: []
 releaseNotes: >-
-  The tunnel now has its own way into Traefik, so each app answers only
-  where its settings say. An app with internal: false no longer opens at
-  home or over the VPN, only through Cloudflare. An app with external:
-  false cannot be reached through the tunnel, even if its hostname is added
-  to the tunnel by hand. If Uptime Kuma or anything else at home checks an
-  app that has internal: false, set internal: true for it first.
+  Two settings in edge.yaml, both off until you set them.
 
 
-  Edge's own network moves to 10.30.0.0/24 on the first start after this
-  update. If Edge then fails to start, stop it, run docker network rm
-  vyrmy-edge_edge on the Umbrel, and start it again.
+  access.team_name, your Zero Trust team name: cloudflared then refuses any
+  request through the tunnel without a valid Cloudflare Access login, so a
+  deleted or changed Access app no longer leaves its address open.
+
+
+  apps.home-assistant.real_ip, with external: true: Home Assistant then sees
+  each visitor's own address, so its local-only webhooks and users refuse
+  the internet. Set use_x_forwarded_for and trusted_proxies (10.21.0.0/16)
+  under http: in Home Assistant's configuration.yaml first, or it will
+  refuse every request that comes through the tunnel.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""
