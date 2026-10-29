@@ -1,7 +1,7 @@
 ---
 id: 015
 title: Desktops cannot open the Umbrel dashboard or Edge's own page
-status: todo
+status: done
 depends_on: [012]
 ---
 
@@ -32,3 +32,17 @@ As in step 1, plus a golden file for the dashboard route.
 
 ## Out of scope
 Restricting other apps for desktops. Per-person rules (Authentik's job).
+
+## Results (29 October 2026, local)
+- Unit tests:
+  - `no-desktops` never contains a `10.31.` address.
+  - Its IPv4 ranges add up to every address but `10.31.0.0/16`.
+  - Every `desk-*` subnet in Edge's compose is inside `DESKTOP_NETWORKS`.
+  - The middleware is first on `app-umbrel`, `edge-assets`, `edge-umbrel-fallback` and `outpost-umbrel`, ahead of `authentik` and `launcher-inject`.
+  - It is absent when no route needs it.
+  - `apps.<id>.desktops` overrides the deny list both ways.
+  - The dashboard golden file carries the new middleware.
+- Traefik 3.7.13 with a rendered file: from `10.31.1.10` on an internal `inhibit_ipv4` network, the dashboard hostname returned 403 and another app 200. From a LAN address both returned 200.
+
+Left for the Umbrel, after the Edge release that pins this sync image: the Acceptance check.
+

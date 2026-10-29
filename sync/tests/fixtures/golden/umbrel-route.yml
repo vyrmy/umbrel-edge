@@ -1,4 +1,4 @@
-# Golden file for the launcher middleware and its routers (task 007).
+# Golden file for the dashboard route's middlewares and routers (tasks 007 and 015).
 middlewares:
   launcher-inject:
     plugin:
@@ -12,11 +12,32 @@ middlewares:
         rewrites:
         - regex: </head>
           replacement: <script src="/__edge/launcher.js"></script></head>
+  no-desktops:
+    ipAllowList:
+      sourceRange:
+      - 0.0.0.0/5
+      - 8.0.0.0/7
+      - 10.0.0.0/12
+      - 10.16.0.0/13
+      - 10.24.0.0/14
+      - 10.28.0.0/15
+      - 10.30.0.0/16
+      - 10.32.0.0/11
+      - 10.64.0.0/10
+      - 10.128.0.0/9
+      - 11.0.0.0/8
+      - 12.0.0.0/6
+      - 16.0.0.0/4
+      - 32.0.0.0/3
+      - 64.0.0.0/2
+      - 128.0.0.0/1
+      - ::/0
 routers:
   app-umbrel:
     entryPoints:
     - websecure
     middlewares:
+    - no-desktops
     - launcher-inject
     rule: Host(`umbrel.bebitwise.dev`)
     service: app-umbrel
@@ -29,6 +50,8 @@ routers:
   edge-assets:
     entryPoints:
     - websecure
+    middlewares:
+    - no-desktops
     priority: 1000
     rule: Host(`umbrel.bebitwise.dev`) && PathPrefix(`/__edge/`)
     service: edge-sync
@@ -41,6 +64,8 @@ routers:
   edge-umbrel-fallback:
     entryPoints:
     - websecure
+    middlewares:
+    - no-desktops
     priority: 1
     rule: Host(`umbrel.bebitwise.dev`)
     service: app-umbrel

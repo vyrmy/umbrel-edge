@@ -147,11 +147,12 @@ def test_settings_alone_add_nothing(config: EdgeConfig, app_data: Path) -> None:
 def test_protected_umbrel_route_authenticates_every_path(app_data: Path) -> None:
     doc = _http(_config(umbrel=AppPolicy(forward_auth=True)), app_data)
     routers = doc["routers"]
-    # Authenticate before the body rewrite, so a login page is never rewritten.
-    assert routers["app-umbrel"]["middlewares"] == ["authentik", "launcher-inject"]
+    # Authenticate before the body rewrite, so a login page is never rewritten. The desktop
+    # refusal (task 015) comes before both.
+    assert routers["app-umbrel"]["middlewares"] == ["no-desktops", "authentik", "launcher-inject"]
     # Neither the launcher script nor the plugin-failure fallback may bypass the login.
-    assert routers["edge-assets"]["middlewares"] == ["authentik"]
-    assert routers["edge-umbrel-fallback"]["middlewares"] == ["authentik"]
+    assert routers["edge-assets"]["middlewares"] == ["no-desktops", "authentik"]
+    assert routers["edge-umbrel-fallback"]["middlewares"] == ["no-desktops", "authentik"]
     assert routers["outpost-umbrel"]["rule"] == (
         "Host(`umbrel.bebitwise.dev`) && PathPrefix(`/outpost.goauthentik.io/`)"
     )
