@@ -59,8 +59,9 @@ def test_dashboard_entrypoint_only_admits_umbrel_main_network(
 ) -> None:
     doc = yaml.safe_load(traefik_writer.render(_state(config, app_data), config.domain))
     allow = doc["http"]["middlewares"]["docker-only"]["ipAllowList"]["sourceRange"]
-    # umbreld proxies the app page from the host side of umbrel_main_network.
-    assert allow == ["10.21.0.0/16"]
+    # umbreld proxies the app page from the host side of umbrel_main_network, and app
+    # containers on the same network must not reach the dashboard.
+    assert allow == ["10.21.0.1/32"]
 
 
 COMPOSE = Path(__file__).parents[2] / "vyrmy-edge" / "docker-compose.yml"
