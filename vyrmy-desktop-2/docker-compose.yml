@@ -1,13 +1,13 @@
 version: "3.7"
 
 services:
-  # Umbrel's login stays on for the port on the Umbrel, so only the person this app is
-  # shared with (and the owner) can open it there. Edge sends its hostname straight to
-  # the container instead, behind Authentik (ARCHITECTURE.md, decision 15).
+  # umbreld's app gateway cannot reach the desktop on its private network, so the port on
+  # the Umbrel shows a page pointing to the desktop's own address, still behind Umbrel's
+  # login. Edge sends that address to the desktop, behind Authentik (decisions 15 and 17).
   app_proxy:
     environment:
-      APP_HOST: vyrmy-desktop-2_desktop_1
-      APP_PORT: 3000
+      APP_HOST: vyrmy-desktop-2_placeholder_1
+      APP_PORT: 8080
 
   desktop:
     # Built from desktop/ in this repo. scripts/pin-desktop-image updates the digest.
@@ -36,6 +36,13 @@ services:
       # Empty: only pages on the desktop's own host name (any port) may open the stream's
       # websocket. Webtop's default, "*", lets any site the person visits try.
       SELKIES_ALLOWED_ORIGINS: ""
+      # Only the websocket stream: the WebRTC side would need UDP the private network lacks.
+      SELKIES_ENABLE_DUAL_MODE: "false|locked"
+      # Decision 18: everything goes through this slot's egress proxy, except the home
+      # domain, which goes straight to Traefik's address on the private network.
+      EGRESS_PROXY: http://10.31.2.3:3128
+      EGRESS_DIRECT_DOMAIN: bebitwise.dev
+      EGRESS_DIRECT_HOST: 10.31.2.2
     volumes:
       - ${APP_DATA_DIR}/data/config:/config
     shm_size: "1gb"
@@ -43,3 +50,112 @@ services:
     # sandboxes, which need unprivileged user namespaces, and the Umbrel's kernel refuses
     # them (credentials.cc: Permission denied), so both crashed at start. With the filter
     # on, both launchers use --no-sandbox, as Umbrel's own Chromium app does.
+    depends_on:
+      - egress
+    # Decision 17: alone on Edge's desk-2 network with Traefik and the egress proxy, so
+    # nothing else on the Umbrel or the home network can reach it, nor it them.
+    networks:
+      desk:
+        ipv4_address: 10.31.2.10
+
+  # The desktop's only way to the internet (decision 18). Squid checks the address it
+  # connects to, so private destinations are refused however they are written.
+  egress:
+    image: ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
+    restart: on-failure
+    user: "13:13"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        cat > /tmp/squid.conf <<'EOF'
+        http_port 3128
+        visible_hostname egress
+        pid_filename none
+        pinger_enable off
+        coredump_dir /tmp
+        cache deny all
+        cache_mem 0 MB
+        cache_log /dev/stderr
+        cache_store_log none
+        via off
+        forwarded_for delete
+        shutdown_lifetime 1 seconds
+        acl clients src 10.31.2.10/32
+        acl never_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/3
+        acl never_dst6 dst ::/128 ::1/128 ::ffff:0:0/96 64:ff9b::/96 64:ff9b:1::/48 100::/64 2001::/32 2001:db8::/32 2002::/16 fc00::/7 fe80::/10 fec0::/10 ff00::/8
+        # Without IPv6 in the container Squid drops never_dst6 as empty, so refuse every
+        # IPv6 literal by its colon.
+        acl v6_literal dstdom_regex :
+        acl ok_ports port 80 443 1025-65535
+        # Only refusals are logged: the rest is one person's browsing.
+        acl refused http_status 403
+        access_log stdio:/dev/stdout refused
+        http_access deny !clients
+        http_access deny !ok_ports
+        http_access deny never_dst
+        http_access deny never_dst6
+        http_access deny v6_literal
+        http_access allow all
+        EOF
+        exec squid -N -f /tmp/squid.conf
+    networks:
+      desk:
+        ipv4_address: 10.31.2.3
+      egress: {}
+
+  # What the port on the Umbrel shows instead of the desktop.
+  placeholder:
+    image: nginx:1.31.8-alpine-slim@sha256:f45171d36c76a8b2f5ef97108a3a8a2294248a6578a0a180edc2d78f7d2edc26
+    restart: on-failure
+    user: "101:101"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        cat > /tmp/nginx.conf <<'EOF'
+        pid /tmp/nginx.pid;
+        error_log /dev/stderr warn;
+        events {}
+        http {
+          access_log off;
+          client_body_temp_path /tmp/body;
+          proxy_temp_path /tmp/proxy;
+          fastcgi_temp_path /tmp/fastcgi;
+          uwsgi_temp_path /tmp/uwsgi;
+          scgi_temp_path /tmp/scgi;
+          server_tokens off;
+          server {
+            listen 8080;
+            default_type text/html;
+            charset utf-8;
+            add_header Cache-Control no-store;
+            return 200 '<!doctype html><html lang="en-GB"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desktop 2</title><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5"><h1>Desktop 2 opens at its own address</h1><p>Open the address for this desktop on bebitwise.dev, then sign in with Authentik. It is not reachable through the Umbrel.</p></body></html>';
+          }
+        }
+        EOF
+        exec nginx -c /tmp/nginx.conf -g 'daemon off;'
+
+networks:
+  # Created by Edge (decision 17), so update Edge before installing or updating this app.
+  desk:
+    external: true
+    name: vyrmy-edge_desk-2
+  egress:
+    driver: bridge

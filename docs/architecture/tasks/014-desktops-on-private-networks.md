@@ -1,7 +1,7 @@
 ---
 id: 014
 title: Move each desktop slot onto its private network, with its own egress proxy
-status: todo
+status: in-progress
 depends_on: [012, 013]
 ---
 

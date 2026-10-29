@@ -21,6 +21,12 @@ EDGE_COMPOSE = ROOT / "vyrmy-edge" / "docker-compose.yml"
 # The lines in Edge's compose file that each slot's entries go above.
 TRAEFIK_MARKER = "      # new-desktop-slot: Traefik desk networks end here.\n"
 NETWORKS_MARKER = "  # new-desktop-slot: desk network definitions end here.\n"
+# What each template file must contain, so a renamed line fails here instead of leaving
+# slot 1's id, port or addresses in the copy.
+REQUIRED = {
+    "umbrel-app.yml": ("vyrmy-desktop-1", "Desktop 1", f"port: {BASE_PORT + 1}"),
+    "docker-compose.yml": ("vyrmy-desktop-1", "Desktop 1", "desk-1", "10.31.1."),
+}
 
 
 def add_edge_network(n: int) -> None:
@@ -61,14 +67,21 @@ def main(argv: list[str]) -> int:
         ("vyrmy-desktop-1", f"vyrmy-desktop-{n}"),
         ("Desktop 1", f"Desktop {n}"),
         (f"port: {BASE_PORT + 1}", f"port: {BASE_PORT + n}"),
+        # The slot's private network and its addresses on it: desktop .10, Squid .3,
+        # Traefik .2 (decisions 17 and 18).
+        ("desk-1", f"desk-{n}"),
+        ("10.31.1.", f"10.31.{n}."),
     ]
-    target.mkdir()
+    texts = {}
     for name in FILES:
         text = (TEMPLATE / name).read_text()
         for old, new in replacements:
-            if old not in text and name == "umbrel-app.yml":
+            if old not in text and old in REQUIRED[name]:
                 raise SystemExit(f"{old!r} not found in {TEMPLATE.name}/{name}")
             text = text.replace(old, new)
+        texts[name] = text
+    target.mkdir()
+    for name, text in texts.items():
         (target / name).write_text(text)
     add_edge_network(n)
     print(f"Created {target.name} on Umbrel port {BASE_PORT + n}, and desk-{n} in Edge's compose.")
