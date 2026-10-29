@@ -5,7 +5,7 @@ tagline: One person's browser, Signal and WhatsApp, kept signed in
 icon: https://raw.githubusercontent.com/linuxserver/docker-templates/master/linuxserver.io/img/webtop-logo.png
 category: social
 # Set by scripts/pin-desktop-image to the date of the image it pins.
-version: "2026.10.29.2"
+version: "2026.10.29.3"
 port: 18102
 # Selkies streams the desktop with browser APIs that only work over HTTPS, so the
 # dashboard opens the app port with Umbrel's own TLS at home.
@@ -19,8 +19,14 @@ description: >-
 
 
   Each Desktop app holds one person's sessions, so share it with that person
-  only (right-click the app, Share with users). Away from home it opens at its
-  own address behind Authentik, and only the person it belongs to can sign in.
+  only (right-click the app, Share with users). It opens at its own address,
+  at home and away, behind Authentik, and only the person it belongs to can
+  sign in. Opening it from the Umbrel shows a page pointing to that address.
+
+
+  The desktop is kept apart from your home network: it reaches your Umbrel
+  apps by their addresses on bebitwise.dev and the internet through its own
+  filter, and nothing else. Signal and WhatsApp calls do not connect from it.
 
 
   Signal and WhatsApp each need linking once: open the app's window, then
@@ -34,9 +40,21 @@ repo: https://github.com/vyrmy/umbrel-edge
 support: https://github.com/vyrmy/umbrel-edge/issues
 gallery: []
 releaseNotes: >-
+  Update Edge to 0.4.3 or later first: this version runs the desktop on a
+  private network that Edge creates, and it will not start without it.
+
+
+  The desktop now reaches only your Umbrel apps, through their addresses on
+  bebitwise.dev, and the internet. Your home network and the Umbrel's own
+  addresses are out of reach. Signal and WhatsApp calls no longer connect; messages
+  still work. Opening the app from the Umbrel now shows a page pointing to
+  the desktop's own address.
+
+
   Rebuilt every week with the latest Chromium and Signal. Update when this
   appears: Signal stops working on builds more than about 90 days old.
-dependencies: []
+dependencies:
+  - vyrmy-edge
 path: ""
 defaultUsername: ""
 defaultPassword: ""
