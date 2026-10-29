@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import logging
+import re
+import ssl
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -19,6 +24,19 @@ log = logging.getLogger(__name__)
 STAGE = "unifi"
 TTL_SECONDS = 300
 PAGE_SIZE = 200  # the documented maximum for the list endpoint
+PIN_ENV = "UNIFI_CERT_SHA256"
+DEFAULT_PORT = 443
+FETCH_TIMEOUT_SECONDS = 10.0
+# Gets the PEM certificate a server presents. Injectable so tests need no network.
+FetchCertificate = Callable[[str, int], str]
+
+
+def normalise_fingerprint(value: str) -> str:
+    """A SHA-256 fingerprint as 64 lower-case hex digits, from hex with optional colons."""
+    digits = value.strip().replace(":", "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digits):
+        raise StageError(STAGE, f"{PIN_ENV} must be a SHA-256 fingerprint: 64 hex digits")
+    return digits
 
 
 @dataclass(frozen=True)
@@ -26,16 +44,25 @@ class Credentials:
     host: str
     api_key: str
     site_id: str
+    cert_sha256: str | None = None  # normalised; None leaves the connection unverified
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Credentials | None:
-        """None when any secret is absent, so the stage is skipped rather than failed."""
+        """None when any secret is absent, so the stage is skipped rather than failed.
+        Reads the environment only; a malformed pin is an error, never a silent fallback to
+        an unverified connection."""
         host, key, site = (
             env.get(n, "").strip() for n in ("UNIFI_HOST", "UNIFI_API_KEY", "UNIFI_SITE_ID")
         )
         if not (host and key and site):
             return None
-        return cls(host=host, api_key=key, site_id=site)
+        pin = env.get(PIN_ENV, "").strip()
+        return cls(
+            host=host,
+            api_key=key,
+            site_id=site,
+            cert_sha256=normalise_fingerprint(pin) if pin else None,
+        )
 
 
 @dataclass
@@ -69,20 +96,82 @@ class Plan:
         return "\n".join(lines) or "unifi: no changes"
 
 
+def _fetch_certificate(host: str, port: int) -> str:
+    return ssl.get_server_certificate((host, port), timeout=FETCH_TIMEOUT_SECONDS)
+
+
+def _display(fingerprint: str) -> str:
+    """Colon-separated upper case, as `openssl x509 -fingerprint` prints it."""
+    return ":".join(fingerprint[i : i + 2] for i in range(0, len(fingerprint), 2)).upper()
+
+
+def _address(host: str) -> tuple[str, int]:
+    try:
+        parts = urlsplit(f"//{host}")
+        name, port = parts.hostname, parts.port
+    except ValueError as exc:
+        raise StageError(STAGE, f"UNIFI_HOST {host!r} is not a host or host:port") from exc
+    if not name:
+        raise StageError(STAGE, f"UNIFI_HOST {host!r} is not a host or host:port")
+    return name, port or DEFAULT_PORT
+
+
+@functools.cache
+def _warn_unverified() -> None:
+    log.warning(
+        "unifi connection is unverified: %s is not set. Pin the gateway certificate by setting "
+        "it to the output of: openssl s_client -connect <host>:443 </dev/null 2>/dev/null "
+        "| openssl x509 -noout -fingerprint -sha256 (the value after the =)",
+        PIN_ENV,
+    )
+
+
+def verify_for(
+    creds: Credentials, *, fetch: FetchCertificate = _fetch_certificate
+) -> ssl.SSLContext | bool:
+    """The `verify=` for the client. With a pin, the gateway's certificate is fetched and checked
+    against it before anything is sent, and the result trusts that certificate alone, so every
+    later connection must present it. Without one, verification stays off."""
+    if creds.cert_sha256 is None:
+        _warn_unverified()
+        return False
+    host, port = _address(creds.host)
+    try:
+        pem = fetch(host, port)
+    except OSError as exc:
+        raise StageError(
+            STAGE, f"cannot fetch the certificate from {host}:{port}: {exc}", retriable=True
+        ) from exc
+    actual = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+    if actual != creds.cert_sha256:
+        raise StageError(
+            STAGE,
+            f"the certificate at {host}:{port} has SHA-256 {_display(actual)}, but {PIN_ENV} is "
+            f"{_display(creds.cert_sha256)}; the API key was not sent",
+        )
+    # The pinned certificate is the only trust anchor, so the name on it does not matter.
+    context = ssl.create_default_context(cadata=pem)
+    context.check_hostname = False
+    context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    return context
+
+
 class UnifiClient:
     def __init__(
         self,
         creds: Credentials,
         *,
+        verify: ssl.SSLContext | bool = False,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._sleep = sleep
-        # UniFi uses a self-signed certificate, so verification is off for this host only.
+        # UniFi uses a self-signed certificate: `verify` is a context that trusts only the
+        # pinned one (see verify_for), or False when no pin is set.
         self._http = httpx.Client(
             base_url=f"https://{creds.host}/proxy/network/integration/v1/sites/{creds.site_id}",
             headers={"X-API-KEY": creds.api_key, "Accept": "application/json"},
-            verify=False,
+            verify=verify,
             timeout=15.0,
             transport=transport,
         )

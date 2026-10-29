@@ -14,8 +14,9 @@ from umbrel_edge.discovery import DASHBOARD
 from umbrel_edge.models import DesiredState, ForwardAuthSettings, Route, StageError
 
 FILE_NAME = "apps.yml"
-# umbrel_main_network only: umbreld proxies the app page to :8080 from 10.21.0.1.
-DASHBOARD_SOURCES = ["10.21.0.0/16"]
+# umbreld's app gateway is a host process, so its requests to :8080 arrive from the bridge
+# gateway of umbrel_main_network, 10.21.0.1. The rest of 10.21.0.0/16 is app containers.
+DASHBOARD_SOURCES = ["10.21.0.1/32"]
 # sync's own server, reached over the edge bridge (container names use the underscore form).
 SYNC_URL = "http://vyrmy-edge_sync_1:9000"
 LAUNCHER_PATH = "/__edge/"

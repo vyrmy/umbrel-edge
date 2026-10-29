@@ -248,6 +248,19 @@ def test_unifi_failure_does_not_stop_traefik(
     assert cf["dns"].called
 
 
+def test_a_pass_with_a_pin_fails_closed_when_the_gateway_cannot_be_reached(
+    tmp_path: Path, app_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UNIFI_HOST", "127.0.0.1:1")
+    monkeypatch.setenv("UNIFI_API_KEY", "key")
+    monkeypatch.setenv("UNIFI_SITE_ID", "site-1")
+    monkeypatch.setenv("UNIFI_CERT_SHA256", "ab" * 32)
+    (tmp_path / "edge.yaml").write_text(_CONFIG)
+    result = run_pass(_settings(tmp_path, app_data))
+    assert [e.stage for e in result.errors] == ["unifi"]
+    assert "cannot fetch the certificate" in result.errors[0].message
+
+
 @respx.mock
 def test_hand_made_record_with_the_proxy_ip_stays_a_conflict(
     client: UnifiClient, tmp_path: Path

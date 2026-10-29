@@ -86,7 +86,7 @@ def _unifi(state: DesiredState, config: EdgeConfig, settings: Settings, *, dry_r
         log.info("unifi stage skipped: UNIFI_HOST, UNIFI_API_KEY or UNIFI_SITE_ID not set")
         return
     ownership = Ownership.load(settings.state_dir)
-    client = unifi.UnifiClient(creds)
+    client = unifi.UnifiClient(creds, verify=unifi.verify_for(creds))
     try:
         result = unifi.reconcile(client, state, str(config.proxy_ip), ownership, dry_run=dry_run)
     finally:

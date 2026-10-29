@@ -27,6 +27,8 @@ EDGE_CONFIG=../vyrmy-edge/edge.example.yaml EDGE_APP_DATA_ROOT=tests/fixtures/ap
   python -m umbrel_edge --dry-run
 ```
 
+The image installs only hash-locked wheels. After changing `sync/pyproject.toml`, run `uv pip compile pyproject.toml --generate-hashes -o requirements.lock --python-version 3.12` in `sync/`; for the build backend, do the same with `build-requirements.in` and `build-requirements.lock`.
+
 ## Installing on the Umbrel
 
 1. Push to `main` and wait for the build. Check the `umbrel-edge-sync` package is public in GitHub (Packages → Package settings → Change visibility).
