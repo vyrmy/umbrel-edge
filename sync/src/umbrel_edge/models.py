@@ -94,6 +94,9 @@ class AccessSettings(BaseModel):
 
     allowed_emails: list[str] = Field(min_length=1)
     session_duration: str = "24h"
+    # The <team> in <team>.cloudflareaccess.com. Set, cloudflared checks the Access token on
+    # every access-true hostname itself (decision 21).
+    team_name: str | None = Field(default=None, pattern=r"^[a-z0-9-]+$")
 
 
 class EdgeConfig(BaseModel):

@@ -96,10 +96,11 @@ def _unifi(state: DesiredState, config: EdgeConfig, settings: Settings, *, dry_r
 
 
 def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> list[StageError]:
-    """Tunnel ingress, Access creation, DNS, then Access deletion, each in its own try block.
-    Ingress goes first so a public name never points at a tunnel that does not know it. Access
-    apps are created before DNS and deleted after it, so a name is never public without its app
-    when access is true."""
+    """Access creation, tunnel ingress, DNS, then Access deletion, each in its own try block.
+    Access apps come first because the ingress needs their aud (decision 21), and a name with
+    no usable app gets neither an ingress entry nor DNS. Ingress precedes DNS, so a public name
+    never points at a tunnel that does not know it. Apps are deleted after DNS, so a name is
+    never public without its app when access is true."""
     creds = cloudflare.Credentials.from_env(os.environ)
     if creds is None:
         log.info(
@@ -113,6 +114,7 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
         errors.append(_failed(stage, exc))
 
     client = cloudflare.CloudflareClient(creds)
+    team = config.access.team_name
     try:
         # A public name that already belongs to someone else is skipped entirely: no ingress,
         # no Access app, no DNS. One read up front covers all three stages.
@@ -127,17 +129,10 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
                 extra={"hostname": hostname},
             )
         state = cloudflare.without_clashes(state, clashes)
-        tunnel_ok = True
-        try:
-            plan = cloudflare.reconcile_tunnel(client, state, dry_run=dry_run)
-            if dry_run:
-                print(plan.describe())
-        except Exception as exc:
-            fail(cloudflare.TUNNEL_STAGE, exc)
-            tunnel_ok = False
+        protected = cloudflare.access_hostnames(state)
 
         # Until the Access plan is known and applied, no access-true name may be published.
-        withheld = frozenset(cloudflare.access_hostnames(state))
+        withheld = frozenset(protected)
         unprotected: frozenset[str] = frozenset()
         access_plan: cloudflare.AccessPlan | None = None
         try:
@@ -155,6 +150,33 @@ def _cloudflare(state: DesiredState, config: EdgeConfig, *, dry_run: bool) -> li
                 # Apps that already existed, or were created before the failure, protect their
                 # names; only those still without an app must wait.
                 withheld = unprotected = access_plan.missing
+        if team and access_plan is not None:
+            # cloudflared can only check a token against a known aud.
+            withheld |= access_plan.without_aud(protected)
+
+        tunnel_ok = True
+        if team and access_plan is None:
+            # Without the apps' aud the ingress cannot be rebuilt; the current one stays, and
+            # DNS creates nothing that might point at a hostname it lacks.
+            log.warning("tunnel ingress left as it is: Access apps could not be read")
+            tunnel_ok = False
+        else:
+            try:
+                plan = cloudflare.reconcile_tunnel(
+                    client,
+                    state,
+                    dry_run=dry_run,
+                    team_name=team,
+                    auds=access_plan.aud if access_plan else None,
+                    # With the plan unknown and no team, keep today's entries: dropping every
+                    # access-true name on one failed read would take them all offline.
+                    withheld=withheld if access_plan is not None else frozenset(),
+                )
+                if dry_run:
+                    print(plan.describe())
+            except Exception as exc:
+                fail(cloudflare.TUNNEL_STAGE, exc)
+                tunnel_ok = False
 
         try:
             dns_plan = cloudflare.reconcile_dns(
