@@ -36,7 +36,8 @@ releaseNotes: >-
 
 
   Edge's own network moves to 10.30.0.0/24 on the first start after this
-  update. If Cloudflare hostnames show errors afterwards, restart Edge.
+  update. If Edge then fails to start, stop it, run docker network rm
+  vyrmy-edge_edge on the Umbrel, and start it again.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""
