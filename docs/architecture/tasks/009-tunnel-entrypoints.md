@@ -1,7 +1,7 @@
 ---
 id: 009
 title: Separate Traefik entrypoints for the tunnel, with routes placed by their flags
-status: todo
+status: in-progress
 depends_on: []
 ---
 
@@ -43,3 +43,29 @@ Golden files for an internal-only, an external-only and a both route; companion 
 
 ## Out of scope
 `real_ip` and `tunnel-realip` (task 010). The Access token check (task 011). Uptime Kuma monitors: list in the release notes which monitored hostnames are external-only and need `internal: true`.
+
+## Results (29 October 2026, local)
+- Unit tests:
+  - `entry_points` for internal-only, external-only and both routes.
+  - An `internal: false` route and its outpost router list only `tunnel`.
+  - The dashboard's `edge-assets`, `edge-umbrel-fallback` and `outpost-umbrel` copy `app-umbrel`.
+  - Umbrel's own `dashboard` router stays on `dashboard`.
+  - `websecure` and `tunnel` carry the same four hardening flags, and `tunnel` has no `forwardedHeaders`.
+  - The tunnel address is Traefik's `edge` address inside the `edge` subnet.
+  - Ingress entries use `https://traefik:8443`, and an entry still on `:443` is rewritten without counting as added or removed.
+  - The forward-auth golden file now lists both entrypoints.
+- Traefik 3.7.13 with the compose flags as written and a rendered file:
+
+  | Route | LAN `:443` | LAN `:8443` | Tunnel `:8443` |
+  |---|---|---|---|
+  | internal only | 200 | refused | 404 |
+  | external only | 404 | refused | 200 |
+  | both | 200 | refused | 200 |
+
+  - Through the tunnel, `%5C` got 400 while `%2F` passed, and `X_Authentik_Username` never reached the app.
+  - `https://traefik:8443` by name with the app's SNI, as cloudflared connects, got 200.
+- Compose v5.6 recreated `vyrmy-edge_edge` with the new subnet, both after a stop like umbreld's (`rm --force --stop`) and with the container running. The Umbrel's Compose is older, so the first `up` after updating is the check there.
+- `docker compose config` passes with the macvlan swapped for a bridge.
+
+Left: step 5 (the Edge release that pins this sync image) and the Acceptance checks on the Umbrel.
+

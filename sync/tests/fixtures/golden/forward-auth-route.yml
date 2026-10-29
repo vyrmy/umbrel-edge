@@ -23,6 +23,7 @@ routers:
   app-jellyfin:
     entryPoints:
     - websecure
+    - tunnel
     middlewares:
     - authentik
     rule: Host(`jellyfin.bebitwise.dev`)
@@ -36,6 +37,7 @@ routers:
   outpost-jellyfin:
     entryPoints:
     - websecure
+    - tunnel
     priority: 1000
     rule: Host(`jellyfin.bebitwise.dev`) && PathPrefix(`/outpost.goauthentik.io/`)
     service: authentik-outpost

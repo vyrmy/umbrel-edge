@@ -101,6 +101,14 @@ services:
       - --entrypoints.websecure.http.tls.certresolver=cloudflare
       - --entrypoints.websecure.http.tls.domains[0].main=bebitwise.dev
       - --entrypoints.websecure.http.tls.domains[0].sans=*.bebitwise.dev
+      # cloudflared's way in, listening only on Traefik's edge address, so nothing on the LAN,
+      # the main network or a desktop can reach it (decision 19). Only routes with external
+      # set answer here. The same hardening as websecure, flag for flag.
+      - --entrypoints.tunnel.address=10.30.0.2:8443
+      - --entrypoints.tunnel.http.aliasHeadersStrategy=delete
+      - --entrypoints.tunnel.http.encodedCharacters.allowEncodedBackSlash=false
+      - --entrypoints.tunnel.http.encodedCharacters.allowEncodedNullCharacter=false
+      - --entrypoints.tunnel.http.encodedCharacters.allowEncodedSemicolon=false
       # Dashboard for the Umbrel app page. Reached only from umbreld's app proxy.
       - --entrypoints.dashboard.address=:8080
       - --certificatesresolvers.cloudflare.acme.storage=/data/acme/acme.json
@@ -135,7 +143,9 @@ services:
         # OIDC apps need it for back-channel calls to Authentik.
         aliases:
           - auth.bebitwise.dev
-      edge: {}
+      # Fixed, because the tunnel entrypoint binds to it.
+      edge:
+        ipv4_address: 10.30.0.2
       lan:
         ipv4_address: 192.168.10.4
         # Per network: a service-level mac_address lands on the first network (default).
@@ -151,7 +161,8 @@ services:
       # new-desktop-slot: Traefik desk networks end here.
 
   # Outbound-only tunnel connector. Ingress comes from the Cloudflare API (written by sync),
-  # so there is no config file. It reaches Traefik by name over the edge bridge.
+  # so there is no config file. It reaches Traefik's tunnel entrypoint by name over the edge
+  # bridge, at https://traefik:8443.
   cloudflared:
     image: cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
     # Exits without a token; Docker's backoff caps retries at one a minute until it is set.
@@ -189,8 +200,13 @@ services:
       edge: {}
 
 networks:
+  # Traefik, cloudflared and sync. A fixed subnet for Traefik's tunnel address; Compose
+  # recreates the network when this changes, since only Edge's own containers use it.
   edge:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 10.30.0.0/24
   lan:
     driver: macvlan
     driver_opts:

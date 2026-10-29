@@ -10,6 +10,7 @@ import pytest
 import respx
 
 from umbrel_edge.cloudflare import (
+    ORIGIN_SERVICE,
     CloudflareClient,
     Credentials,
     build_ingress,
@@ -46,7 +47,7 @@ def _state(*routes: Route) -> DesiredState:
 def _ingress_entry(host: str) -> dict[str, Any]:
     return {
         "hostname": host,
-        "service": "https://traefik:443",
+        "service": ORIGIN_SERVICE,
         "originRequest": {"originServerName": host},
     }
 
@@ -132,6 +133,35 @@ def test_no_put_when_nothing_changed(client: CloudflareClient) -> None:
     plan = reconcile_tunnel(client, _state(_route("a.x.dev")))
     assert not plan.changed
     assert not put.called
+
+
+def test_ingress_goes_to_the_tunnel_entrypoint() -> None:
+    # Decision 19: never websecure (:443), which also serves the LAN and the desktops.
+    (entry, _) = build_ingress([_route("a.x.dev")])
+    assert entry == {
+        "hostname": "a.x.dev",
+        "service": "https://traefik:8443",
+        "originRequest": {"originServerName": "a.x.dev"},
+    }
+
+
+@respx.mock
+def test_entries_on_the_old_port_are_rewritten(client: CloudflareClient) -> None:
+    old = [{**_ingress_entry("a.x.dev"), "service": "https://traefik:443"}]
+    respx.get(TUNNEL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "success": True,
+                "result": {"config": {"ingress": [*old, {"service": "http_status:404"}]}},
+            },
+        )
+    )
+    put = respx.put(TUNNEL).mock(return_value=httpx.Response(200, json={"success": True}))
+    plan = reconcile_tunnel(client, _state(_route("a.x.dev")))
+    assert plan.changed and not plan.added and not plan.removed
+    sent = json.loads(put.calls[0].request.content)["config"]["ingress"]
+    assert sent[0]["service"] == "https://traefik:8443"
 
 
 @respx.mock
