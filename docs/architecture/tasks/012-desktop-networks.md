@@ -1,7 +1,7 @@
 ---
 id: 012
 title: One private network per desktop, owned by Edge and joined by Traefik
-status: in-progress
+status: done
 depends_on: []
 ---
 
@@ -54,4 +54,4 @@ Edge's compose ran with the macvlan swapped for a bridge, `app_proxy` dropped an
 - Traefik's `:8080` is open at TCP level from a desk network. Its routers allow only `10.21.0.1/32` (Edge 0.4.2), which sync's routes file sets and this run did not include.
 - `scripts/new-desktop-slot 3` on a copy added `desk-3` in both places, and a second run refused because the slot exists.
 
-Left for the Umbrel (Docker 28.5): the acceptance checks above, after updating Edge.
+Released in Edge 0.4.3. Left for the Umbrel (Docker 28.5): the acceptance checks above, after updating Edge.
