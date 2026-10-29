@@ -102,7 +102,7 @@ def test_umbrels_own_dashboard_router_stays_on_its_entrypoint(app_data: Path) ->
     assert _http(app_data)["routers"]["dashboard"]["entryPoints"] == ["dashboard"]
 
 
-@pytest.mark.parametrize("entrypoint", ["websecure", "tunnel"])
+@pytest.mark.parametrize("entrypoint", ["websecure", "tunnel", "tunnel-realip"])
 def test_every_app_entrypoint_is_hardened(entrypoint: str) -> None:
     flags = _flags()
     for flag, value in HARDENING.items():

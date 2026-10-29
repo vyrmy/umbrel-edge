@@ -58,7 +58,8 @@ def entry_points(route: Route) -> list[str]:
     if route.internal:
         points.append("websecure")
     if route.external:
-        points.append("tunnel")
+        # Decision 20: the trusting entrypoint, for a route that needs visitors' addresses.
+        points.append("tunnel-realip" if route.real_ip else "tunnel")
     return points
 
 
@@ -125,6 +126,7 @@ def render(state: DesiredState, domain: str) -> str:
         }
     if state.forward_auth is not None:
         _add_forward_auth(state, state.forward_auth, domain, routers, services, middlewares)
+    _add_real_ip(state, routers, middlewares)
     _add_no_desktops(state, routers, middlewares)
     http: dict[str, Any] = {
         "routers": routers,
@@ -182,6 +184,38 @@ def _add_forward_auth(
         }
 
 
+def _serving(route: Route, routers: dict[str, Any]) -> list[str]:
+    """Every router that answers on route's hostname."""
+    name = _name(route)
+    serving = [name, "outpost-" + name.removeprefix("app-")]
+    if route.app_id == DASHBOARD.id:
+        serving += ["edge-assets", "edge-umbrel-fallback"]
+    return [r for r in serving if r in routers]
+
+
+def _add_real_ip(state: DesiredState, routers: dict[str, Any], middlewares: dict[str, Any]) -> None:
+    """Pin or drop the forwarded headers tunnel-realip would otherwise pass on from the client."""
+    for route in state.routes:
+        if not route.real_ip:
+            continue
+        name = "realip-" + _name(route).removeprefix("app-")
+        middlewares[name] = {"headers": {"customRequestHeaders": _realip_headers(route)}}
+        for router in _serving(route, routers):
+            routers[router]["middlewares"] = [name, *routers[router].get("middlewares", [])]
+
+
+def _realip_headers(route: Route) -> dict[str, str]:
+    # An empty value makes Traefik remove the header.
+    return {
+        "X-Forwarded-Host": route.hostname,
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Uri": "",
+        "X-Forwarded-Method": "",
+        "X-Forwarded-Port": "",
+        "X-Real-Ip": "",
+    }
+
+
 def _add_no_desktops(
     state: DesiredState, routers: dict[str, Any], middlewares: dict[str, Any]
 ) -> None:
@@ -191,17 +225,9 @@ def _add_no_desktops(
         return
     middlewares[NO_DESKTOPS] = {"ipAllowList": {"sourceRange": NOT_DESKTOPS}}
     for route in denied:
-        name = _name(route)
-        serving = [name, "outpost-" + name.removeprefix("app-")]
-        if route.app_id == DASHBOARD.id:
-            serving += ["edge-assets", "edge-umbrel-fallback"]
-        for router in serving:
-            if router in routers:
-                # First, so a desktop is refused before the login or the body rewrite runs.
-                routers[router]["middlewares"] = [
-                    NO_DESKTOPS,
-                    *routers[router].get("middlewares", []),
-                ]
+        for router in _serving(route, routers):
+            # First, so a desktop is refused before the login or the body rewrite runs.
+            routers[router]["middlewares"] = [NO_DESKTOPS, *routers[router].get("middlewares", [])]
 
 
 def _tls(domain: str) -> dict[str, Any]:

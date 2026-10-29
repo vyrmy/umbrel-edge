@@ -79,3 +79,7 @@ apps: {}
 #    external: true
 #    upstream_host: vyrmy-desktop-1_desktop_1
 #    upstream_port: 3000
+#  home-assistant:       # decision 20: Home Assistant sees each visitor's own address, so
+#    external: true      #   its local-only webhooks and users refuse the internet. First set
+#    real_ip: true       #   use_x_forwarded_for and trusted_proxies: [10.21.0.0/16] under
+#                        #   http: in its configuration.yaml. Not allowed with forward_auth.

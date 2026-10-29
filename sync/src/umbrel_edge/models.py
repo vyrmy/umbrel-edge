@@ -59,6 +59,9 @@ class AppPolicy(BaseModel):
     forward_auth: bool | None = None
     # Whether the desktops may open this app's hostname. None: not for ids in desktop_deny.
     desktops: bool | None = None
+    # Decision 20: the app sees each visitor's own address, through the tunnel-realip
+    # entrypoint. Needs the route external, and refuses forward auth.
+    real_ip: bool = False
 
     @model_validator(mode="after")
     def _upstream_host_needs_port(self) -> AppPolicy:
@@ -126,6 +129,13 @@ class EdgeConfig(BaseModel):
     forward_auth: ForwardAuthSettings | None = None
     apps: dict[str, AppPolicy] = {}
 
+    def external_for(self, app_id: str) -> bool:
+        """Whether app_id's route is published through the tunnel (decision 9)."""
+        policy = self.apps.get(app_id, AppPolicy())
+        if policy.external is not None:
+            return policy.external
+        return self.defaults.external and app_id not in self.external_deny
+
     def forward_auth_for(self, app_id: str) -> bool:
         """Whether app_id's route sits behind Authentik (decisions 14 and 15)."""
         policy = self.apps.get(app_id, AppPolicy())
@@ -150,6 +160,23 @@ class EdgeConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _real_ip_needs_external_without_forward_auth(self) -> EdgeConfig:
+        asked = sorted(app_id for app_id, policy in self.apps.items() if policy.real_ip)
+        if internal := [a for a in asked if not self.external_for(a)]:
+            raise ValueError(
+                "real_ip is on for " + ", ".join(internal) + ", which is not external; set "
+                "external: true for it, or turn real_ip off"
+            )
+        # A trusting entrypoint would pass the client's X-Forwarded-Uri to Authentik's skip
+        # rules (decision 20).
+        if protected := [a for a in asked if self.forward_auth_for(a)]:
+            raise ValueError(
+                "real_ip is on for " + ", ".join(protected) + ", which also has forward_auth; "
+                "set forward_auth: false for it, or turn real_ip off"
+            )
+        return self
+
 
 class Route(BaseModel):
     """One app's resolved desired state."""
@@ -164,6 +191,7 @@ class Route(BaseModel):
     access: bool
     forward_auth: bool = False
     desktops: bool = True
+    real_ip: bool = False
 
 
 class DesiredState(BaseModel):

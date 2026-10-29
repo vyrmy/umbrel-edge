@@ -41,6 +41,9 @@ def build(manifests: list[AppManifest], config: EdgeConfig) -> DesiredState:
             )
         owner[route.hostname] = manifest.id
         routes.append(route)
+    if mixed := sorted(r.app_id for r in routes if r.real_ip and r.forward_auth):
+        # Validation runs on load; a config changed afterwards must still fail closed.
+        raise StageError("config", f"real_ip and forward_auth are both on for {', '.join(mixed)}")
     protected = sorted(r.app_id for r in routes if r.forward_auth)
     if protected and config.forward_auth is None:
         # Fail closed: never publish a route without the login it asked for.
@@ -57,10 +60,7 @@ def build(manifests: list[AppManifest], config: EdgeConfig) -> DesiredState:
 def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: EdgeConfig) -> Route:
     d = config.defaults
     internal = d.internal if policy.internal is None else policy.internal
-    if policy.external is not None:
-        external = policy.external
-    else:
-        external = d.external and manifest.id not in config.external_deny
+    external = config.external_for(manifest.id)
     access = (d.access if policy.access is None else policy.access) and external
     if policy.desktops is not None:
         desktops = policy.desktops
@@ -77,4 +77,5 @@ def _route(manifest: AppManifest, policy: AppPolicy, subdomain: str, config: Edg
         access=access,
         forward_auth=config.forward_auth_for(manifest.id),
         desktops=desktops,
+        real_ip=policy.real_ip and external,
     )

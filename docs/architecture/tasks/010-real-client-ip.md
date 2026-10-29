@@ -1,7 +1,7 @@
 ---
 id: 010
 title: Real visitor addresses for Home Assistant through a trusting tunnel entrypoint
-status: todo
+status: in-progress
 depends_on: [009]
 ---
 
@@ -40,3 +40,20 @@ Validation errors; `entry_points`; middleware contents; ingress port; that a `re
 
 ## Out of scope
 Real addresses for any other app. Authentik's own client-IP handling.
+
+## Results (29 October 2026, local)
+- Unit tests:
+  - `real_ip` is refused on a route that is not external (Home Assistant is in `external_deny`, so it needs `external: true` as well). It is also refused with forward auth, both when set and when `upstream_host` turns it on by default. The error names the app.
+  - `build` fails closed if the config is changed after loading.
+  - The route sits on `websecure` and `tunnel-realip`, never gets `authentik`, and other routes get no `realip-*` middleware.
+  - Ingress uses `:8444` for it and `:8443` for the rest.
+  - `tunnel-realip` carries the hardening flags and is the only entrypoint that trusts forwarded headers.
+  - A golden file covers the route and its middleware.
+- Traefik 3.7.13 with the compose flags as written, sending `X-Forwarded-For: 192.168.1.1,203.0.113.9` as cloudflared passes it on, plus forged `X-Forwarded-Uri`, `-Method`, `-Port`, `-Host`, `-Proto` and `X-Real-Ip`:
+  - Through `:8444`, the app got `X-Forwarded-For: 192.168.1.1,203.0.113.9`, whose rightmost entry is the visitor. Host and Proto were pinned, and the other four were gone.
+  - Through `:8443`, another app got only Traefik's own values.
+  - Home Assistant is not served on `:8443`, and other apps are not served on `:8444`.
+  - From the LAN, Home Assistant saw the LAN client's address, and `:8444` could not be reached.
+
+Left: the Edge release that pins this sync image, the owner's step 4, and the Acceptance checks on the Umbrel.
+
