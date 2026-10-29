@@ -1,7 +1,7 @@
 ---
 id: 009
 title: Separate Traefik entrypoints for the tunnel, with routes placed by their flags
-status: in-progress
+status: done
 depends_on: []
 ---
 
@@ -67,5 +67,5 @@ Golden files for an internal-only, an external-only and a both route; companion 
 - Compose v5.6 recreated `vyrmy-edge_edge` with the new subnet, both after a stop like umbreld's (`rm --force --stop`) and with the container running. The Umbrel's Compose is older, so the first `up` after updating is the check there.
 - `docker compose config` passes with the macvlan swapped for a bridge.
 
-Left: step 5 (the Edge release that pins this sync image) and the Acceptance checks on the Umbrel.
+Step 5: Edge 0.5.0 pins `umbrel-edge-sync:sha-98ed0a6` (main's build of #11). Left for the Umbrel: the Acceptance checks.
 
