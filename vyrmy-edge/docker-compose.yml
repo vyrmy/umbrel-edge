@@ -109,6 +109,16 @@ services:
       - --entrypoints.tunnel.http.encodedCharacters.allowEncodedBackSlash=false
       - --entrypoints.tunnel.http.encodedCharacters.allowEncodedNullCharacter=false
       - --entrypoints.tunnel.http.encodedCharacters.allowEncodedSemicolon=false
+      # The same, for routes with real_ip only (decision 20): it trusts the forwarded headers
+      # cloudflared passes on and adds none, so X-Forwarded-For ends with the address
+      # Cloudflare saw. sync's realip-<id> middleware pins or drops the other X-Forwarded-*.
+      - --entrypoints.tunnel-realip.address=10.30.0.2:8444
+      - --entrypoints.tunnel-realip.http.aliasHeadersStrategy=delete
+      - --entrypoints.tunnel-realip.http.encodedCharacters.allowEncodedBackSlash=false
+      - --entrypoints.tunnel-realip.http.encodedCharacters.allowEncodedNullCharacter=false
+      - --entrypoints.tunnel-realip.http.encodedCharacters.allowEncodedSemicolon=false
+      - --entrypoints.tunnel-realip.forwardedHeaders.trustedIPs=10.30.0.0/24
+      - --entrypoints.tunnel-realip.forwardedHeaders.notAppendXForwardedFor=true
       # Dashboard for the Umbrel app page. Reached only from umbreld's app proxy.
       - --entrypoints.dashboard.address=:8080
       - --certificatesresolvers.cloudflare.acme.storage=/data/acme/acme.json

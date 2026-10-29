@@ -1,0 +1,26 @@
+# Golden file for a route with real_ip (decision 20).
+middlewares:
+  realip-home-assistant:
+    headers:
+      customRequestHeaders:
+        X-Forwarded-Host: home-assistant.bebitwise.dev
+        X-Forwarded-Method: ''
+        X-Forwarded-Port: ''
+        X-Forwarded-Proto: https
+        X-Forwarded-Uri: ''
+        X-Real-Ip: ''
+routers:
+  app-home-assistant:
+    entryPoints:
+    - websecure
+    - tunnel-realip
+    middlewares:
+    - realip-home-assistant
+    rule: Host(`home-assistant.bebitwise.dev`)
+    service: app-home-assistant
+    tls:
+      certResolver: cloudflare
+      domains:
+      - main: bebitwise.dev
+        sans:
+        - '*.bebitwise.dev'

@@ -22,6 +22,8 @@ ACCESS_STAGE = "cloudflare_access"
 BASE_URL = "https://api.cloudflare.com/client/v4"
 # Traefik's tunnel entrypoint, which listens only on its edge address (decision 19).
 ORIGIN_SERVICE = "https://traefik:8443"
+# tunnel-realip, for routes with real_ip (decision 20).
+REAL_IP_SERVICE = "https://traefik:8444"
 CATCH_ALL = {"service": "http_status:404"}
 MANAGED_COMMENT = "managed-by=umbrel-edge"
 ACCESS_PREFIX = "umbrel-edge:"
@@ -211,11 +213,11 @@ def build_ingress(routes: list[Route]) -> list[dict[str, Any]]:
     """One entry per hostname in sorted order, then the mandatory catch-all."""
     entries: list[dict[str, Any]] = [
         {
-            "hostname": hostname,
-            "service": ORIGIN_SERVICE,
-            "originRequest": {"originServerName": hostname},
+            "hostname": route.hostname,
+            "service": REAL_IP_SERVICE if route.real_ip else ORIGIN_SERVICE,
+            "originRequest": {"originServerName": route.hostname},
         }
-        for hostname in sorted({r.hostname for r in routes})
+        for route in sorted({r.hostname: r for r in routes}.values(), key=lambda r: r.hostname)
     ]
     return [*entries, dict(CATCH_ALL)]
 
