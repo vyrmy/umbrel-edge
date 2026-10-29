@@ -1,7 +1,7 @@
 ---
 id: 010
 title: Real visitor addresses for Home Assistant through a trusting tunnel entrypoint
-status: in-progress
+status: done
 depends_on: [009]
 ---
 
@@ -55,5 +55,5 @@ Real addresses for any other app. Authentik's own client-IP handling.
   - Home Assistant is not served on `:8443`, and other apps are not served on `:8444`.
   - From the LAN, Home Assistant saw the LAN client's address, and `:8444` could not be reached.
 
-Left: the Edge release that pins this sync image, the owner's step 4, and the Acceptance checks on the Umbrel.
+Released in Edge 0.5.1, which pins `umbrel-edge-sync:sha-c7ec3d3`. Left: the owner's step 4 and the Acceptance checks on the Umbrel.
 
