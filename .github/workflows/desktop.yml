@@ -66,6 +66,10 @@ jobs:
             test -x /usr/local/bin/wrapped-signal
             test -x /usr/local/bin/wrapped-chromium
             test -x /usr/local/bin/wrapped-whatsapp
+            test -f /etc/chromium.d/90-egress
+            test -x /custom-cont-init.d/10-egress-policy
+            grep -q "HTTPS_PROXY" /usr/local/bin/wrapped-signal
+            grep -q "^for file in /etc/chromium.d/" /usr/bin/chromium-browser
             grep -q "^Exec=/usr/local/bin/wrapped-whatsapp$" /usr/share/applications/whatsapp-web.desktop
             grep -q "^Exec=/usr/local/bin/wrapped-whatsapp --after-browser$" /etc/xdg/autostart/whatsapp-web.desktop
             grep -q "^Exec=/usr/local/bin/wrapped-signal" /usr/share/applications/signal-desktop.desktop
