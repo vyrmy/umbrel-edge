@@ -26,7 +26,7 @@ Slot `n` compose, from ARCHITECTURE.md Contracts, "Desktop slot":
 ## Steps
 1. Write slot 1, then generate slot 2 with `new-desktop-slot` logic (or by hand) and diff them.
 2. Locally, with Edge's compose from task 012 running: the desktop starts, its stream loads through Traefik, Chromium and the WhatsApp window browse through the proxy, and from inside the desktop `192.168.x`, `10.21.x`, the host, `desk-2` and Traefik `:8080` are all unreachable while `https://<app>.DOMAIN` loads. Docker's embedded DNS answers nothing external (`getent hosts example.com` fails).
-   Also confirm Squid's `access_log ... refused` line logs refused requests and nothing else; the research run logged every request, so this line is untested.
+   Also confirm Squid's `access_log ... refused` line logs refused requests and nothing else. Task 013's run on Squid 6.13 confirmed it; recheck on the pinned image. Squid also writes `WARNING: refused ACL is used in context without an HTTP response` to stderr for connections that close before a request (Chromium preconnects, about 86 in 10 minutes). It is noise in `docker logs` only; accept it.
 3. Release the desktops only after the Edge release from task 012 is installed on the Umbrel; say so in the release notes.
 
 ## Acceptance

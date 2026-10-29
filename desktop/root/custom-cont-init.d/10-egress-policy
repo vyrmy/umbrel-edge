@@ -5,10 +5,9 @@
 # /etc/chromium.d/90-egress still adds the resolver rule. Runs as root at every start.
 POLICY=/etc/chromium/policies/managed/egress.json
 
-if [ -z "$EGRESS_PROXY" ]; then
-  rm -f "$POLICY"
-  exit 0
-fi
+# Cleared first, so a refused value never leaves an earlier policy in force.
+rm -f "$POLICY"
+[ -z "$EGRESS_PROXY" ] && exit 0
 
 # The values land in JSON, so refuse anything but URL and host characters.
 SAFE='^[A-Za-z0-9.:/-]*$'

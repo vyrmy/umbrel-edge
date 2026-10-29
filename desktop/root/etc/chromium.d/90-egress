@@ -1,4 +1,4 @@
-# Sourced by Debian's /usr/bin/chromium-browser, which every Chromium launch reaches: the menu,
+# Sourced by the Chromium package's /usr/bin/chromium-browser, which every Chromium launch reaches: the menu,
 # the autostart entry, wrapped-whatsapp and links opened from Signal (ARCHITECTURE.md, decision 18).
 # A slot that sets EGRESS_PROXY sends everything through its egress proxy, except the home
 # domain, which goes straight to Traefik's address on the slot's private network, so Chromium
