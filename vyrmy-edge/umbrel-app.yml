@@ -4,7 +4,7 @@ name: Edge
 tagline: HTTPS hostnames for every app, at home and away
 icon: https://raw.githubusercontent.com/traefik/traefik/master/docs/content/assets/img/traefik.logo.png
 category: networking
-version: "0.4.1"
+version: "0.4.2"
 port: 18080
 description: >-
   Gives every app on this Umbrel its own hostname under bebitwise.dev, with a
@@ -27,14 +27,11 @@ repo: https://github.com/vyrmy/umbrel-edge
 support: https://github.com/vyrmy/umbrel-edge/issues
 gallery: []
 releaseNotes: >-
-  Traefik and the tunnel connector now get only their own token from
-  secrets.env, and Traefik no longer sees the rest of Edge's data folder. Its
-  certificate moves to data/acme, copied across on the first start. The Umbrel
-  dashboard is no longer published outside your network by default: if your
-  edge.yaml has its own external_deny list, add umbrel to it, or set
-  apps.umbrel.external to keep the dashboard public. Forward auth now replaces
-  every X-authentik header a visitor sends, and Traefik refuses paths with
-  encoded backslashes, semicolons or null characters.
+  The Traefik dashboard now answers only Umbrel's own app page, not other apps
+  on this Umbrel. Edge can also check your UniFi gateway's certificate before
+  it sends the API key: add UNIFI_CERT_SHA256 to secrets.env with the
+  certificate's SHA-256 fingerprint, then restart Edge. The sync image now
+  installs only dependencies whose hashes are locked.
 dependencies: []
 path: "/dashboard/"
 defaultUsername: ""
