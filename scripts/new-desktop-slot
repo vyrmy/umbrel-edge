@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Add Desktop <n> to the store as a copy of Desktop 1 (ARCHITECTURE.md, decision 16).
+"""Add Desktop <n> to the store as a copy of Desktop 1 (ARCHITECTURE.md, decisions 16 and 17).
 
 Usage: scripts/new-desktop-slot <n>
 
-Slot n gets app id vyrmy-desktop-<n> and Umbrel port 18100 + n. Commit the new folder,
-then follow the steps it prints.
+Slot n gets app id vyrmy-desktop-<n>, Umbrel port 18100 + n, and its own private network,
+vyrmy-edge_desk-<n> (10.31.<n>.0/24, Traefik at 10.31.<n>.2), which this adds to Edge's
+compose file. Commit both, then follow the steps it prints.
 """
 
 from __future__ import annotations
@@ -16,6 +17,34 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "vyrmy-desktop-1"
 FILES = ("umbrel-app.yml", "docker-compose.yml")
 BASE_PORT = 18100
+EDGE_COMPOSE = ROOT / "vyrmy-edge" / "docker-compose.yml"
+# The lines in Edge's compose file that each slot's entries go above.
+TRAEFIK_MARKER = "      # new-desktop-slot: Traefik desk networks end here.\n"
+NETWORKS_MARKER = "  # new-desktop-slot: desk network definitions end here.\n"
+
+
+def add_edge_network(n: int) -> None:
+    """Give Traefik an address on desk-<n> and define the network, unless it already exists."""
+    text = EDGE_COMPOSE.read_text()
+    if f"\n  desk-{n}:\n" in text:
+        return
+    for marker in (TRAEFIK_MARKER, NETWORKS_MARKER):
+        if text.count(marker) != 1:
+            raise SystemExit(f"{marker.strip()!r} must appear once in {EDGE_COMPOSE}")
+    traefik = f"      desk-{n}:\n        ipv4_address: 10.31.{n}.2\n"
+    network = (
+        f"  desk-{n}:\n"
+        "    internal: true\n"
+        "    driver: bridge\n"
+        "    driver_opts:\n"
+        '      com.docker.network.bridge.inhibit_ipv4: "true"\n'
+        "    ipam:\n"
+        "      config:\n"
+        f"        - subnet: 10.31.{n}.0/24\n"
+    )
+    text = text.replace(TRAEFIK_MARKER, traefik + TRAEFIK_MARKER)
+    text = text.replace(NETWORKS_MARKER, network + NETWORKS_MARKER)
+    EDGE_COMPOSE.write_text(text)
 
 
 def main(argv: list[str]) -> int:
@@ -41,11 +70,14 @@ def main(argv: list[str]) -> int:
                 raise SystemExit(f"{old!r} not found in {TEMPLATE.name}/{name}")
             text = text.replace(old, new)
         (target / name).write_text(text)
-    print(f"Created {target.name} on Umbrel port {BASE_PORT + n}.")
+    add_edge_network(n)
+    print(f"Created {target.name} on Umbrel port {BASE_PORT + n}, and desk-{n} in Edge's compose.")
     print(
         f"""
 Next:
-1. Commit and push. Install Desktop {n} on the Umbrel and share it with one person only.
+1. Bump Edge's version in vyrmy-edge/umbrel-app.yml. Commit and push, update Edge on the
+   Umbrel first (Desktop {n} cannot start until vyrmy-edge_desk-{n} exists), then install
+   Desktop {n} and share it with one person only.
 2. Add to edge.yaml under apps (pick the hostname):
      vyrmy-desktop-{n}:
        subdomain: desk-<name>

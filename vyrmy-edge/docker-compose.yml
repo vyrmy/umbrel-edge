@@ -143,6 +143,12 @@ services:
         # Default route via 192.168.10.1, so replies to Main and VPN clients leave from
         # 192.168.10.4 rather than being NATed out through the host. Needs Engine 28+.
         gw_priority: 1
+      # One private network per desktop slot (decision 17): Traefik is the slot's only way in.
+      desk-1:
+        ipv4_address: 10.31.1.2
+      desk-2:
+        ipv4_address: 10.31.2.2
+      # new-desktop-slot: Traefik desk networks end here.
 
   # Outbound-only tunnel connector. Ingress comes from the Cloudflare API (written by sync),
   # so there is no config file. It reaches Traefik by name over the edge bridge.
@@ -194,3 +200,25 @@ networks:
         - subnet: 192.168.10.0/24
           gateway: 192.168.10.1
           ip_range: 192.168.10.4/32
+  # Desktop slot n joins vyrmy-edge_desk-<n> as an external network, alone with Traefik and its
+  # own egress proxy (decisions 17 and 18). internal: no route out. inhibit_ipv4: the bridge
+  # gets no host address, so the host cannot reach the desktop and the desktop cannot reach
+  # host services on the bridge. Never change a shipped desk network: Compose cannot recreate
+  # one that a running desktop is attached to, so Edge would fail to start.
+  desk-1:
+    internal: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+    ipam:
+      config:
+        - subnet: 10.31.1.0/24
+  desk-2:
+    internal: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+    ipam:
+      config:
+        - subnet: 10.31.2.0/24
+  # new-desktop-slot: desk network definitions end here.

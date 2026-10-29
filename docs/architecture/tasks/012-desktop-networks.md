@@ -1,7 +1,7 @@
 ---
 id: 012
 title: One private network per desktop, owned by Edge and joined by Traefik
-status: todo
+status: in-progress
 depends_on: []
 ---
 
@@ -45,3 +45,13 @@ The local checks in step 2, recorded in this file's results section. `new-deskto
 
 ## Out of scope
 Moving the desktops (task 014).
+
+## Results (29 October 2026, local, Docker 29.9.2)
+Edge's compose ran with the macvlan swapped for a bridge, `app_proxy` dropped and sync idle; stand-in desktops were Python containers.
+- `vyrmy-edge_desk-1` and `-2`: `Internal: true`, `inhibit_ipv4: true`, subnets `10.31.1.0/24` and `10.31.2.0/24`, Traefik at `.2` on each. The host has no `10.31.` address.
+- From a container on `desk-1` at `10.31.1.10`: Traefik `10.31.1.2` ports 80, 443 and 8080 open, and its name resolves. Unreachable: the host on three bridge gateways and `10.31.1.1`, a container on the main network, a container on `desk-2`, and `1.1.1.1`. `mainapp`, `deskB` and `example.com` do not resolve.
+- From the host and from a container on the main network, the desktop's `10.31.1.10:8000` times out.
+- Traefik's `:8080` is open at TCP level from a desk network. Its routers allow only `10.21.0.1/32` (Edge 0.4.2), which sync's routes file sets and this run did not include.
+- `scripts/new-desktop-slot 3` on a copy added `desk-3` in both places, and a second run refused because the slot exists.
+
+Left for the Umbrel (Docker 28.5): the acceptance checks above, after updating Edge.
