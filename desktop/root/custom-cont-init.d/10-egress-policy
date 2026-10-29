@@ -1,0 +1,32 @@
+#!/usr/bin/with-contenv bash
+
+# Locks Chromium's proxy setting with a managed policy, so it cannot be turned off in
+# chrome://settings (ARCHITECTURE.md, decision 18). The policy cannot map hostnames, so
+# /etc/chromium.d/90-egress still adds the resolver rule. Runs as root at every start.
+POLICY=/etc/chromium/policies/managed/egress.json
+
+if [ -z "$EGRESS_PROXY" ]; then
+  rm -f "$POLICY"
+  exit 0
+fi
+
+# The values land in JSON, so refuse anything but URL and host characters.
+SAFE='^[A-Za-z0-9.:/-]*$'
+if [[ ! "$EGRESS_PROXY" =~ $SAFE || ! "${EGRESS_DIRECT_DOMAIN:-}" =~ $SAFE ]]; then
+  echo "egress-policy: EGRESS_PROXY or EGRESS_DIRECT_DOMAIN has unexpected characters; no policy written" >&2
+  exit 1
+fi
+
+bypass=""
+[ -n "${EGRESS_DIRECT_DOMAIN:-}" ] && bypass="$EGRESS_DIRECT_DOMAIN;*.$EGRESS_DIRECT_DOMAIN"
+mkdir -p "$(dirname "$POLICY")"
+cat > "$POLICY" <<JSON
+{
+  "ProxySettings": {
+    "ProxyMode": "fixed_servers",
+    "ProxyServer": "$EGRESS_PROXY",
+    "ProxyBypassList": "$bypass"
+  }
+}
+JSON
+chmod 0644 "$POLICY"

@@ -2,15 +2,23 @@
 
 # Signal Desktop is Electron, so it gets the same sandbox handling as Webtop's
 # wrapped-chromium: its own sandbox when the container runs without Docker's seccomp
-# filter (the Umbrel apps set seccomp=unconfined), --no-sandbox otherwise.
+# filter, --no-sandbox otherwise (the desktop apps keep the filter on).
 BIN=/opt/Signal/signal-desktop
 
 if [ "${PIXELFLUX_WAYLAND,,}" == "true" ]; then
   WAYLAND="--ozone-platform=wayland"
 fi
 
+# A slot with an egress proxy (ARCHITECTURE.md, decision 18): Signal's own code reads only
+# HTTPS_PROXY/https_proxy, and --proxy-server covers the Chromium layer inside Electron.
+if [ -n "$EGRESS_PROXY" ]; then
+  export HTTPS_PROXY="$EGRESS_PROXY" https_proxy="$EGRESS_PROXY"
+  export HTTP_PROXY="$EGRESS_PROXY" http_proxy="$EGRESS_PROXY"
+  PROXY="--proxy-server=$EGRESS_PROXY"
+fi
+
 if grep -q 'Seccomp:.0' /proc/1/status; then
-  exec ${BIN} ${WAYLAND} "$@"
+  exec ${BIN} ${WAYLAND} ${PROXY} "$@"
 else
-  exec ${BIN} ${WAYLAND} --no-sandbox "$@"
+  exec ${BIN} ${WAYLAND} ${PROXY} --no-sandbox "$@"
 fi

@@ -32,4 +32,8 @@ RUN \
     /var/tmp/* \
     /tmp/*
 
+# /etc/chromium.d/90-egress only works while Debian's launcher sources that folder. Fail the
+# weekly build if it stops, instead of shipping desktops that silently bypass the egress proxy.
+RUN grep -q '^for file in /etc/chromium.d/' /usr/bin/chromium-browser
+
 COPY root/ /

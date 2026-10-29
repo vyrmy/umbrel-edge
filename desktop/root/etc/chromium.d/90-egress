@@ -1,0 +1,14 @@
+# Sourced by Debian's /usr/bin/chromium-browser, which every Chromium launch reaches: the menu,
+# the autostart entry, wrapped-whatsapp and links opened from Signal (ARCHITECTURE.md, decision 18).
+# A slot that sets EGRESS_PROXY sends everything through its egress proxy, except the home
+# domain, which goes straight to Traefik's address on the slot's private network, so Chromium
+# does no DNS of its own. Without EGRESS_PROXY nothing changes. "$@" is extended rather than
+# CHROMIUM_FLAGS because the launcher expands that unquoted, and the resolver rule has spaces.
+if [ -n "$EGRESS_PROXY" ]; then
+  set -- "$@" "--proxy-server=$EGRESS_PROXY"
+  if [ -n "$EGRESS_DIRECT_DOMAIN" ] && [ -n "$EGRESS_DIRECT_HOST" ]; then
+    set -- "$@" \
+      "--proxy-bypass-list=$EGRESS_DIRECT_DOMAIN;*.$EGRESS_DIRECT_DOMAIN" \
+      "--host-resolver-rules=MAP *.$EGRESS_DIRECT_DOMAIN $EGRESS_DIRECT_HOST, MAP $EGRESS_DIRECT_DOMAIN $EGRESS_DIRECT_HOST"
+  fi
+fi
