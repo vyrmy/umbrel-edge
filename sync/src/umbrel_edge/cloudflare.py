@@ -20,7 +20,8 @@ TUNNEL_STAGE = "cloudflare_tunnel"
 DNS_STAGE = "cloudflare_dns"
 ACCESS_STAGE = "cloudflare_access"
 BASE_URL = "https://api.cloudflare.com/client/v4"
-ORIGIN_SERVICE = "https://traefik:443"
+# Traefik's tunnel entrypoint, which listens only on its edge address (decision 19).
+ORIGIN_SERVICE = "https://traefik:8443"
 CATCH_ALL = {"service": "http_status:404"}
 MANAGED_COMMENT = "managed-by=umbrel-edge"
 ACCESS_PREFIX = "umbrel-edge:"

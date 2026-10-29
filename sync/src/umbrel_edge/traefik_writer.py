@@ -50,6 +50,18 @@ NOT_DESKTOPS = [
 ]
 
 
+def entry_points(route: Route) -> list[str]:
+    """Where Traefik answers a route (decision 19): websecure serves the LAN, the VPN, the
+    main network and the desktops; tunnel serves only cloudflared. Never empty, because a
+    route with neither flag is not written."""
+    points = []
+    if route.internal:
+        points.append("websecure")
+    if route.external:
+        points.append("tunnel")
+    return points
+
+
 def render(state: DesiredState, domain: str) -> str:
     routers: dict[str, Any] = {
         "dashboard": {
@@ -65,7 +77,7 @@ def render(state: DesiredState, domain: str) -> str:
         name = _name(route)
         routers[name] = {
             "rule": f"Host(`{route.hostname}`)",
-            "entryPoints": ["websecure"],
+            "entryPoints": entry_points(route),
             "service": name,
             "tls": _tls(domain),
         }
@@ -88,7 +100,7 @@ def render(state: DesiredState, domain: str) -> str:
         routers["edge-assets"] = {
             "rule": f"Host(`{dashboard.hostname}`) && PathPrefix(`{LAUNCHER_PATH}`)",
             "priority": ASSETS_PRIORITY,
-            "entryPoints": ["websecure"],
+            "entryPoints": entry_points(dashboard),
             "service": "edge-sync",
             "tls": _tls(domain),
         }
@@ -97,7 +109,7 @@ def render(state: DesiredState, domain: str) -> str:
         routers["edge-umbrel-fallback"] = {
             "rule": f"Host(`{dashboard.hostname}`)",
             "priority": FALLBACK_PRIORITY,
-            "entryPoints": ["websecure"],
+            "entryPoints": entry_points(dashboard),
             "service": _name(dashboard),
             "tls": _tls(domain),
         }
@@ -164,7 +176,7 @@ def _add_forward_auth(
         routers["outpost-" + name.removeprefix("app-")] = {
             "rule": f"Host(`{route.hostname}`) && PathPrefix(`{OUTPOST_PATH}`)",
             "priority": OUTPOST_PRIORITY,
-            "entryPoints": ["websecure"],
+            "entryPoints": entry_points(route),
             "service": OUTPOST_SERVICE,
             "tls": _tls(domain),
         }
