@@ -345,7 +345,7 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
   shutdown_lifetime 1 seconds
   acl clients src 10.31.<n>.10/32
   acl never_dst dst 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/3
-  acl never_dst6 dst ::/128 ::1/128 ::ffff:0:0/96 64:ff9b::/96 64:ff9b:1::/48 100::/64 2001::/32 2001:db8::/32 2002::/16 fc00::/7 fe80::/10 fec0::/10 ff00::/8
+  acl never_dst6 dst ::/128 ::1/128 64:ff9b::/96 64:ff9b:1::/48 100::/64 2001::/32 2001:db8::/32 2002::/16 fc00::/7 fe80::/10 fec0::/10 ff00::/8
   acl v6_literal dstdom_regex :
   acl ok_ports port 80 443 1025-65535
   acl refused http_status 403
@@ -358,7 +358,7 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
   http_access allow all
   ```
 
-  `v6_literal` is there because Squid in a container without IPv6 drops the `never_dst6` lines as empty ACLs, which would leave IPv6 literals unrefused.
+  `v6_literal` is there because Squid in a container without IPv6 drops the `never_dst6` lines as empty ACLs, which would leave IPv6 literals unrefused. `never_dst6` must not list `::ffff:0:0/96`: in a container with IPv6, Squid holds every IPv4 address in that IPv4-mapped form, so the entry refused all of IPv4 (Desktop 2026.10.29.3 on the Umbrel). `never_dst` covers those addresses, and `v6_literal` covers a mapped literal.
 - `placeholder`: a pinned `nginx:alpine-slim` on `default`, serving one page saying the desktop opens at its own address. `app_proxy` points at it, so Umbrel's login still guards the slot's port.
 - Networks: `desk: {external: true, name: vyrmy-edge_desk-<n>}`, `egress: {driver: bridge}`.
 - Manifest: `dependencies: [vyrmy-edge]`.
