@@ -6,6 +6,8 @@ Every app on the Umbrel (Dell 3080, `192.168.10.2`, Servers network) is reached 
 
 This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that works both at home and away. At home the name resolves straight to a reverse proxy on the LAN. Away, it resolves to a Cloudflare Tunnel with Cloudflare Access in front. Installing or removing an app on the Umbrel creates or removes its route, its UniFi DNS record, its tunnel hostname and its Access application within a minute, with no manual step.
 
+The store also carries the owner's own apps. One of them, `vyrmy-claude`, runs long-lived Claude Code sessions on the Umbrel and shows them in claude.ai/code and the Claude apps, so work carries on with the laptop shut (decisions 23 to 28).
+
 ## Non-goals
 
 - Exposing anything that is not an Umbrel app. UniFi, Protect, the PicoKVM and the Sonoff dongle stay LAN or VPN only.
@@ -18,6 +20,20 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 - Managing Tailscale, WireGuard or the UniFi firewall beyond the rules listed in task 001.
 - Voice and video calls from the desktops. Messaging works through the egress proxy; calls stay on phones (decision 18).
 - Reaching anything from a desktop that is not an Umbrel app with a hostname: other LAN devices, app ports by IP, other containers.
+- A self-hosted web UI for Claude Code. The front end is claude.ai/code and the Claude apps (decision 23).
+- Claude sessions with access to Docker, the host or the home network: no Docker socket, no route to the LAN or to Umbrel apps (decision 26).
+- More than one Claude account per Umbrel. `vyrmy-claude` is the owner's, like a desktop slot is one person's.
+
+## Assumptions
+
+Added with the Claude app; the decisions before 23 record theirs inline.
+
+1. **The owner has a Claude Pro, Max or Team subscription.** Remote Control refuses API keys and `setup-token` tokens. If wrong, the front end becomes a self-hosted UI on the Agent SDK, which is a new decision.
+2. **One person runs sessions.** If others want their own, `vyrmy-claude` becomes slots like the desktops, with one Claude login each.
+3. **The Umbrel is amd64**, as the Dell 3080 is. If not, the image builds for arm64 too.
+4. **Remote Control works through an HTTP CONNECT proxy.** Claude Code documents `HTTPS_PROXY`, and Remote Control is outbound HTTPS and WebSocket only. If it does not, task 017 gives the container NAT to the internet and keeps the proxy for everything else, a weaker isolation recorded in Risks.
+5. **Projects come from GitHub over HTTPS**, cloned into the app's volume with a fine-grained token limited to the chosen repositories. Nothing in a session needs a home service.
+6. **The Dell has at least 16 GB of memory.** Four concurrent sessions with their builds fit in the 6 GB the app is allowed. If memory is short, lower `--capacity` and `mem_limit` together.
 
 ## Decisions
 
@@ -44,6 +60,12 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 20. **Home Assistant alone sees each visitor's real address, through a second, trusting tunnel entrypoint.** `apps.<id>.real_ip: true` puts an external route on `tunnel-realip` (`10.30.0.2:8444`), which trusts forwarded headers from the `edge` subnet and does not append its own, so `X-Forwarded-For` ends with the address Cloudflare appended. A middleware on that route pins `X-Forwarded-Host` and `X-Forwarded-Proto` and drops `X-Forwarded-Uri`, `X-Forwarded-Method`, `X-Forwarded-Port` and `X-Real-Ip`, which a trusting entrypoint would otherwise pass on from the client. Home Assistant walks `X-Forwarded-For` from the right past its trusted proxies, so it gets Cloudflare's entry: local-only webhooks and users stop working from the internet, and a forged header changes nothing. `real_ip` is refused with forward auth, because a client's `X-Forwarded-Uri` would reach Authentik's skip rules. Rejected: trusting forwarded headers on `tunnel` itself (Authentik records the leftmost entry, which the client chooses, and forward auth would see client values); stripping middleware on every other route (one missing middleware reopens the bypass).
 21. **cloudflared checks the Access token for every route with `access` true.** With `access.team_name` set, each such ingress rule carries `originRequest.access` with `required: true`, the team name and that hostname's Access app `aud`. A request with no token, a wrong audience or an invalid token is refused by cloudflared, so a deleted or edited Access app no longer leaves its hostname open. Access apps are now created and updated before the tunnel ingress is written, since the ingress needs their `aud`, and a hostname whose app is missing gets no ingress entry and no DNS record. Rejected: checking the token in Traefik (a JWT plugin would run inside the process that holds the certificate token).
 22. **Desktops cannot open the Umbrel dashboard or Edge's own page.** Routes for ids in `desktop_deny` (`umbrel` and `vyrmy-edge` by default, overridable with `apps.<id>.desktops`) get a `no-desktops` middleware, an IP allowlist of every IPv4 range except `10.31.0.0/16`, plus all of IPv6. The dashboard installs apps and opens a terminal on the host, and a desktop's browser is the most exposed program in the house. Rejected: a separate Traefik entrypoint for desktops (Chromium can map a name to an address but not to another port, and `websecure` already holds `:443` on every interface).
+23. **Claude sessions run as Claude Code's Remote Control in server mode, in the app `vyrmy-claude`, and are used from claude.ai/code and the Claude apps.** `claude remote-control` serves one folder to Anthropic's own front end: several sessions at once (`--capacity`), each with its live tool calls and diffs, and they keep running when the browser closes. It only makes outbound connections, so nothing in the app is exposed and there is no web shell to secure. Rejected: CloudCLI (`siteboon/claudecodeui`), the one maintained self-hosted UI, which is a Node server with a shell tab and had an unauthenticated remote code execution bug this year (CVE-2026-31975, CVSS 9.8); a desktop slot with Claude Code in a terminal (one session per terminal, gone when the XFCE session ends, no structured view); our own UI on the Agent SDK (a web app and its login to build and keep safe, for what claude.ai already does).
+24. **The image is `ghcr.io/vyrmy/umbrel-claude`: Debian bookworm with Node 22, Claude Code from npm and the tools a session needs, run as uid 1000, rebuilt weekly and pinned by digest.** The weekly build takes the newest Claude Code and `DISABLE_AUTOUPDATER=1` keeps it there until the next release, so a session never changes under itself. Tools: `git`, `gh`, `tmux`, `ripgrep`, `jq`, `curl`, `python3`, `python3-venv`, `uv`, `build-essential`. `scripts/pin-image` replaces `pin-desktop-image` and pins either image. Rejected: the native installer's self-update inside the container (an unreviewed binary swap in a running service); Alpine (Claude Code needs glibc tooling and its own ripgrep there).
+25. **`claude-serve` keeps Remote Control running in a tmux session, and the owner answers its one-time prompts there.** The entrypoint starts tmux session `claude`, which runs `claude remote-control --name Umbrel --spawn same-dir --capacity 4 --permission-mode acceptEdits` in `/home/claude/work` and starts it again 10 seconds after it exits. The first sign-in (copy the link, sign in elsewhere, paste the code), the "Enable Remote Control?" question and the folder trust question are answered once through `docker exec -it vyrmy-claude_claude_1 tmux attach -t claude`; `/home/claude` is the app's volume, so they persist. `same-dir` because `work` holds several repositories rather than being one, and a session makes its own worktree when it needs one. `acceptEdits` because edits stay in the container and git undoes them, while commands still ask. Rejected: pre-seeding the trust flag in `~/.claude.json` (undocumented internals); `setup-token` (it cannot start Remote Control); `bypassPermissions` for unattended runs (decision 27).
+26. **The Claude container sits alone on the app's own internal network, `10.31.200.0/24`, and reaches the internet only through its own Squid.** It is the desktops' pattern (decisions 17 and 18) without Traefik: the network is internal with `inhibit_ipv4`, the container is at `.10`, the slot's Squid at `.3` with the desktops' configuration, and `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` point every tool at it. Docker's DNS gives the container no outside names, so a tool that ignores the proxy simply fails. Git uses HTTPS: Squid refuses port 22. The subnet is inside `10.31.0.0/16`, which the owner confirmed free, and slot numbers stop at 99, so 200 never collides with a desktop. The app owns the network, because nothing else joins it. Rejected: the Umbrel's main network (every app container in reach); a domain allowlist in Squid (breaks web fetches and package installs from arbitrary hosts; revisit if sessions start fetching untrusted content routinely).
+27. **What a session can read, it can send out, so the volume holds only what Claude needs.** The Claude login and one fine-grained GitHub token (`gh auth login`), limited to the repositories being worked on, live in `/home/claude`. No SSH keys, no home credentials and no Docker socket. A prompt-injected command can therefore leak those two and the code, but cannot reach the LAN (decision 26) or the host. Bypass mode is refused in managed settings (`permissions.disableBypassPermissionsMode: "disable"` in `/etc/claude-code/managed-settings.json`), so a long run cannot be switched to it by accident. Rejected: bypass for long runs (the documented risk is exfiltration of the very credentials above).
+28. **The app's Umbrel port shows a page that points to claude.ai/code, behind Umbrel's login.** As with the desktops, a small nginx `placeholder` serves it, on `umbrel_main_network`, through `app_proxy`. Edge gives it `vyrmy-claude.DOMAIN` like any app; the page holds no controls. Rejected: a web terminal for the first sign-in (a shell behind a login is exactly what decision 23 avoids; the sign-in happens once, over SSH).
 
 ## Stack
 
@@ -58,6 +80,7 @@ This project gives every Umbrel app one HTTPS hostname, `<app>.<DOMAIN>`, that w
 | Tests | pytest, respx (httpx mocking) | current |
 | Lint and types | ruff, mypy `--strict` | current |
 | Personal desktop | linuxserver Webtop (Ubuntu XFCE, Selkies) with Chromium, plus Signal Desktop | rebuilt weekly, pinned by digest |
+| Claude sessions | Claude Code (npm `@anthropic-ai/claude-code`) on `node:22-bookworm-slim`, Remote Control server mode | rebuilt weekly, pinned by digest |
 | CI | GitHub Actions, GHCR | n/a |
 | Host | umbrelOS on the Dell 3080 | whatever is installed; check 1.x or 2.x in task 001 |
 
@@ -131,6 +154,8 @@ Non-secret configuration lives in `${APP_DATA_DIR}/data/edge.yaml`. The dashboar
 
 **Cost.** £0 a month: Cloudflare Tunnel, DNS and Access (up to 50 users) are free, and the domain is one you already own. Let's Encrypt is free.
 
+**Claude sessions (decisions 23 to 28).** `vyrmy-claude`'s container runs `claude-serve`, which keeps one `claude remote-control` server alive in tmux. The server holds an outbound connection to Anthropic through the slot's Squid; claude.ai/code and the Claude apps list it as the environment Umbrel, and each session started there runs as a process in the container, in `/home/claude/work`. Nothing connects in. If the server or the container restarts, `claude-serve` starts it again with `--continue`, so sessions from the last four hours come back on their own. Everything a session keeps (the login, `gh` credentials, clones, `~/.claude`) is in the app's volume and goes with Umbrel's own app backups.
+
 ## Structure
 
 ```
@@ -162,11 +187,17 @@ umbrel-edge/                         # GitHub repo, added to Umbrel as a communi
 │   └── docker-compose.yml           # desktop (on vyrmy-edge_desk-<n> only), egress (Squid), placeholder
 ├── desktop/                         # the umbrel-desktop image: Webtop + Signal, autostart files,
 │                                    #   /etc/chromium.d/90-egress, the egress policy init script
+├── vyrmy-claude/                    # Claude Code sessions for the owner (decisions 23 to 28)
+│   ├── umbrel-app.yml               # id vyrmy-claude, port 18120, version = image date
+│   └── docker-compose.yml           # claude (on its own internal network), egress (Squid), placeholder
+├── claude/                          # the umbrel-claude image: Dockerfile, managed-settings.json,
+│                                    #   claude-serve (tmux + Remote Control loop)
 ├── scripts/
 │   ├── new-desktop-slot             # copies Desktop 1 to Desktop <n>
-│   └── pin-desktop-image            # sets every slot's image digest and version (run by CI)
+│   └── pin-image                    # sets an image's digest and version in its apps (run by CI)
 ├── .github/workflows/build.yml      # build + push sync image to GHCR, run tests
-├── .github/workflows/desktop.yml    # weekly umbrel-desktop build, then pin-desktop-image
+├── .github/workflows/desktop.yml    # weekly umbrel-desktop build, then pin-image
+├── .github/workflows/claude.yml     # weekly umbrel-claude build, then pin-image
 └── docs/architecture/               # this plan and the task files
 ```
 
@@ -363,6 +394,59 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
 - Networks: `desk: {external: true, name: vyrmy-edge_desk-<n>}`, `egress: {driver: bridge}`.
 - Manifest: `dependencies: [vyrmy-edge]`.
 
+**Claude app** (`vyrmy-claude/docker-compose.yml`, decisions 23 to 28):
+
+- `claude`: `ghcr.io/vyrmy/umbrel-claude` pinned by digest, `restart: unless-stopped`, `tty: true`, `stdin_open: true`, `init: true`, `user: "1000:1000"`, `cap_drop: [ALL]`, `security_opt: [no-new-privileges:true]`, `mem_limit: 6g`, `pids_limit: 4096`. Volume `${APP_DATA_DIR}/data/home:/home/claude`. On `claude` only, at `10.31.200.10`. Environment:
+
+  ```yaml
+  HOME: /home/claude
+  DISABLE_AUTOUPDATER: "1"
+  HTTPS_PROXY: http://10.31.200.3:3128
+  HTTP_PROXY: http://10.31.200.3:3128
+  https_proxy: http://10.31.200.3:3128
+  http_proxy: http://10.31.200.3:3128
+  NO_PROXY: localhost,127.0.0.1
+  no_proxy: localhost,127.0.0.1
+  ```
+
+  Never set `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` or `DISABLE_GROWTHBOOK`: the first two take precedence over the subscription login, which Remote Control needs, and the last two switch Remote Control off.
+- `egress`: the desktop slot's Squid service and configuration, with `acl clients src 10.31.200.10/32`, on `claude` at `10.31.200.3` and on `egress`.
+- `placeholder`: the desktop slot's nginx service, with this page (decision 28):
+
+  > **Claude Code on this Umbrel**
+  >
+  > Open claude.ai/code or the Claude app and choose Umbrel to start a session here. Sessions keep running when you close the page.
+  >
+  > Setting up, or sessions not appearing? Sign in to the Umbrel over SSH and run `docker exec -it vyrmy-claude_claude_1 tmux attach -t claude`, then answer what it asks. Press Ctrl+B, then D, to leave it running.
+
+- Networks: `claude: {internal: true, driver: bridge, driver_opts: {com.docker.network.bridge.inhibit_ipv4: "true"}, ipam: {config: [{subnet: 10.31.200.0/24}]}}`, `egress: {driver: bridge}`.
+- Manifest: id `vyrmy-claude`, name `Claude Code`, port `18120`, `dependencies: []`, version set by `scripts/pin-image`.
+
+**`claude-serve`** (`/usr/local/bin/claude-serve`, the image's entrypoint):
+
+```sh
+#!/bin/sh
+set -eu
+mkdir -p "$HOME/work"
+cd "$HOME/work"
+# After the first run, a restart resumes the earlier sessions rather than starting empty.
+tmux new-session -d -s claude -c "$HOME/work" '
+  while true; do
+    set -- --name Umbrel --spawn same-dir --capacity 4 --permission-mode acceptEdits
+    [ -e "$HOME/.claude-serve-ran" ] && set -- "$@" --continue
+    claude remote-control "$@"
+    touch "$HOME/.claude-serve-ran"
+    echo "Remote Control stopped; starting again in 10 seconds."
+    sleep 10
+  done'
+# The container lives as long as the tmux session does.
+while tmux has-session -t claude 2>/dev/null; do sleep 30; done
+```
+
+`/etc/claude-code/managed-settings.json`: `{"permissions": {"disableBypassPermissionsMode": "disable"}}`.
+
+**`scripts/pin-image`**: `scripts/pin-image --image ghcr.io/vyrmy/<name> --apps '<glob>' sha256:<64 hex> [YYYY-MM-DD]`. For each app folder matching the glob, it replaces the digest on the `<image>:main@sha256:` line and sets `version` to the build date, with `.2`, `.3` for later builds that day, as `pin-desktop-image` does today. Apps already on the digest are left alone. An app folder with no line for the image is an error.
+
 **Error shape inside `sync`.** Every client raises `StageError(stage: str, message: str, retriable: bool)`. `loop.py` catches it per stage and records it for `/healthz`. HTTP 429 and 5xx responses are retriable with exponential backoff (3 attempts). 4xx responses are not. A POST is never repeated once it may have reached the server (a timeout after sending, or a 5xx), because a repeat could create the resource twice; the next pass re-plans instead.
 
 ## Risks and open questions
@@ -394,4 +478,8 @@ What the owner sets up in Authentik for each protected app (checked against [Aut
 - **The new subnets must not clash with home networks.** `10.30.0.0/24` and `10.31.0.0/16` become routes on the Umbrel. If a VLAN, the VPN or Tailscale uses either range, pick other ones before task 009 and 012 ship (the audit script's host addresses section shows the routes).
 - **Docker on the Umbrel is 28.5; the network tests ran on 29.9.** `inhibit_ipv4`, the embedded DNS refusing external names on internal networks, and the isolation results are re-checked on the Umbrel in task 012's and 014's acceptance.
 - **Squid is pinned by digest and nothing updates it.** Refresh it by hand with the desktop releases until the weekly workflow does.
+- **Remote Control through Squid is untested.** Assumption 4. Task 017 checks it first; if the server cannot hold its connection through the proxy, the fallback is a normal bridge for the Claude container with the proxy variables kept, which loses the refusal of private destinations for anything that ignores them.
+- **An expired Claude login stops every session.** Claude Code warns three days before; after that the server waits in tmux until `/login` is run there. Once signed in again, `claude-serve`'s next start uses `--continue`, which brings back sessions from the last four hours.
+- **Transcripts live on Anthropic's servers while connected.** That is how Remote Control works; it is the same as using claude.ai/code in the cloud.
+- **A new Claude Code version can add a first-run question.** The server then waits in tmux until it is answered, and the placeholder page cannot show that. The weekly release notes say to check `tmux attach` after an update until this has been quiet for a few releases.
 - **Home Assistant is public too, without Access (24 October 2026).** This overrides decision 9's VPN-only stance for one reason: the claude.ai connector to Home Assistant's MCP server (`/api/mcp`) connects from Anthropic's servers and signs in with Home Assistant's own OAuth, which neither Access nor forward auth can sit in front of. The companion app then works away from home without the VPN as well. Home Assistant's login is the only gate, so every Home Assistant user needs MFA, and the Cloudflare rate-limiting rule also counts `/auth/login_flow`. Home Assistant's own IP ban is no help here and must stay off (`login_attempts_threshold` unset): umbreld's gateway replaces `X-Forwarded-For` with Traefik's address (`app-gateway.ts`), so every visitor, at home or away, reaches Home Assistant from one IP and a ban would lock everyone out.
